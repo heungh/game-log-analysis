@@ -25,7 +25,7 @@ Under the `content` folder, Each folder requires at least one `index.<lang>.md` 
 
 ```aidl
 +++
-title = "AWS Workshop Template"
+title = "AWS Workshop"
 weight = 0
 +++
 ```

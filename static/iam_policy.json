@@ -1,0 +1,19 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowPassRole",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "*",
+            "Condition": {
+                "StringLike": {
+                    "iam:PassedToService": [
+                        "glue.amazonaws.com",
+                        "quicksight.amazonaws.com"
+                    ]
+                }
+            }
+        }
+    ]
+}
