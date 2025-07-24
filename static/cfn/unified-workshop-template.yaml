@@ -1708,7 +1708,7 @@ Outputs:
   # VS Code Access
   VSCodeURL:
     Description: VS Code Server URL via CloudFront
-    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Value: !Sub 'https://${CloudFrontDistribution.DistributionDomainName}'
   
   VSCodeDirectURL:
     Description: Direct VS Code Server URL (for troubleshooting)
