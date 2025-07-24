@@ -278,7 +278,9 @@ Resources:
     Properties:
       Name: !Sub '${AWS::StackName}-aurora-secret'
       Description: Secrets for Aurora MySQL Cluster
-      SecretString: !Sub '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-${AWS::Region}.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
+      SecretString: !Sub 
+        - '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-${Region}.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
+        - Region: !Ref 'AWS::Region'
 
   # Lambda function for secret processing
   SecretPlaintextLambdaRole:
