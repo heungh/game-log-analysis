@@ -1644,8 +1644,9 @@ Outputs:
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WorkshopInstance --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
-        Timeout: PT15M  # Clo
-udFront Distribution for VS Code Server
+        Timeout: PT15M
+
+  # CloudFront Distribution for VS Code Server
   VSCodeCachePolicy:
     Type: AWS::CloudFront::CachePolicy
     Properties:
