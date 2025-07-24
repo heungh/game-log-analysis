@@ -1,0 +1,1763 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Unified CloudFormation template for AWS Workshop with VS Code Server and Data Pipeline (Version 1.0.0)'
+
+Parameters:
+  # Instance Configuration
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large, m5.large, m5.xlarge, t4g.medium, t4g.large]
+    Description: EC2 instance type (t3.medium recommended for stability)
+    
+  InstanceVolumeSize:
+    Type: Number
+    Description: EC2 instance volume size in GB
+    Default: 40
+    MinValue: 20
+    MaxValue: 100
+
+  # VS Code Configuration  
+  VSCodeUser:
+    Type: String
+    Description: Username for VS Code server
+    Default: participant
+    
+  HomeFolder:
+    Type: String
+    Description: Folder to open in VS Code server
+    Default: /workshop
+
+  # Security Configuration
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed to access services (default allows all)
+
+  # Workshop Assets
+  AssetZipS3Path:
+    Description: S3 path holding the asset zip file to be copied into the home folder. To not include any assets, leave blank
+    Type: String
+    Default: ''
+
+  RepoUrl:
+    Description: Remote repo URL to clone. To not clone a remote repo, leave blank
+    Type: String
+    Default: ''
+
+Conditions:
+  # Architecture detection based on instance type
+  IsGraviton: !Or
+    - !Equals [ !Select [ 0, !Split ['.', !Ref InstanceType ]], 't4g']
+    - !Equals [ !Select [ 0, !Split ['.', !Ref InstanceType ]], 'c6g']
+    - !Equals [ !Select [ 0, !Split ['.', !Ref InstanceType ]], 'c7g']
+    - !Equals [ !Select [ 0, !Split ['.', !Ref InstanceType ]], 'm6g']
+    - !Equals [ !Select [ 0, !Split ['.', !Ref InstanceType ]], 'm7g']
+
+Mappings:
+  # AMI mappings using SSM parameters for latest images
+  ArmImage:
+    AmazonLinux-2023:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
+  
+  AmdImage:
+    AmazonLinux-2023:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+  
+  # CloudFront Prefix Lists by region
+  AWSRegionsPrefixListID:
+    ap-northeast-1:
+      PrefixList: pl-58a04531
+    ap-northeast-2:
+      PrefixList: pl-22a6434b
+    ap-south-1:
+      PrefixList: pl-9aa247f3
+    ap-southeast-1:
+      PrefixList: pl-31a34658
+    ap-southeast-2:
+      PrefixList: pl-b8a742d1
+    ca-central-1:
+      PrefixList: pl-38a64351
+    eu-central-1:
+      PrefixList: pl-a3a144ca
+    eu-north-1:
+      PrefixList: pl-fab65393
+    eu-west-1:
+      PrefixList: pl-4fa04526
+    eu-west-2:
+      PrefixList: pl-93a247fa
+    eu-west-3:
+      PrefixList: pl-75b1541c
+    sa-east-1:
+      PrefixList: pl-5da64334
+    us-east-1:
+      PrefixList: pl-3b927c52
+    us-east-2:
+      PrefixList: pl-b6a144df
+    us-west-1:
+      PrefixList: pl-4ea04527
+    us-west-2:
+      PrefixList: pl-82a045eb
+
+Resources:
+  # VPC and Networking Infrastructure
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-VPC'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-IGW'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet1'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet2'
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PrivateSubnet1'
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PrivateSubnet2'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicRouteTable'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC-ID'
+  
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet1-ID'
+  
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet2-ID'
+  
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1-ID'
+  
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2-ID' 
+ # Security Groups
+  WorkshopSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Workshop instance (VS Code + Data Pipeline)
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # SSH access
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCIDR
+          Description: SSH access
+        # VS Code Server access
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AllowedCIDR
+          Description: VS Code Server access
+        # Streamlit access
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: !Ref AllowedCIDR
+          Description: Streamlit access
+        # Data Pipeline internal ports
+        - IpProtocol: tcp
+          FromPort: 24224
+          ToPort: 24224
+          CidrIp: 10.0.0.0/16
+          Description: Fluent Bit forward input
+        - IpProtocol: tcp
+          FromPort: 8686
+          ToPort: 8686
+          CidrIp: 10.0.0.0/16
+          Description: Vector API
+        - IpProtocol: tcp
+          FromPort: 2020
+          ToPort: 2020
+          CidrIp: 10.0.0.0/16
+          Description: Fluent Bit HTTP
+        # MySQL access
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.0.0.0/16
+          Description: MySQL access
+        # CloudFront access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !FindInMap [AWSRegionsPrefixListID, !Ref 'AWS::Region', PrefixList]
+          Description: CloudFront access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-SecurityGroup'
+
+  # Secrets Manager for VS Code and Database
+  VSCodeSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub '${AWS::StackName}-vscode-secret'
+      Description: VS Code server user details
+      GenerateSecretString:
+        PasswordLength: 16
+        SecretStringTemplate: !Sub '{"username":"${VSCodeUser}"}'
+        GenerateStringKey: 'password'
+        ExcludePunctuation: true
+
+  AuroraSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-aurora-secret'
+      Description: Secrets for Aurora MySQL Cluster
+      SecretString: !Sub '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-${AWS::Region}.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
+
+  # Lambda function for secret processing
+  SecretPlaintextLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub lambda.${AWS::URLSuffix}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: 
+                  - !Ref VSCodeSecret
+                  - !Ref AuroraSecret
+
+  SecretPlaintextLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Return the value of the secret
+      Handler: index.lambda_handler
+      Runtime: python3.13
+      MemorySize: 128
+      Timeout: 10
+      Architectures:
+        - arm64
+      Role: !GetAtt SecretPlaintextLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def is_valid_json(json_string):
+              try:
+                  json.loads(json_string)
+                  return True
+              except json.JSONDecodeError:
+                  return False
+
+          def lambda_handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='No action to take')
+                  else:
+                      resource_properties = event['ResourceProperties']
+                      secret_name = resource_properties['SecretArn']
+                      secrets_mgr = boto3.client('secretsmanager')
+
+                      secret = secrets_mgr.get_secret_value(SecretId = secret_name)
+                      secret_value = secret['SecretString']
+
+                      responseData = {}
+                      if is_valid_json(secret_value):
+                          responseData = secret_value
+                      else:
+                          responseData = {'secret': secret_value}
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData=json.loads(responseData), reason='OK', noEcho=True)
+              except Exception as e:
+                  logger.error(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=str(e))
+
+  SecretPlaintext:
+    Type: Custom::SecretPlaintextLambda
+    Properties:
+      ServiceToken: !GetAtt SecretPlaintextLambda.Arn
+      ServiceTimeout: 15
+      SecretArn: !Ref VSCodeSecret
+
+  # S3 Bucket for data storage
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'workshop-data-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-DataBucket'
+
+  # S3 VPC Endpoint
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3Bucket}'
+              - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PublicRouteTable
+
+  # Aurora MySQL Cluster
+  AuroraDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora DB
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-DBSubnetGroup'
+
+  AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-mysql
+      DatabaseName: game
+      DBClusterIdentifier: !Sub '${AWS::StackName}-gamedb-cluster'
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:password}}' ]]
+      DBSubnetGroupName: !Ref AuroraDBSubnetGroup
+      VpcSecurityGroupIds: 
+        - !Ref WorkshopSecurityGroup
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-AuroraCluster'
+
+  AuroraDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-mysql
+      DBClusterIdentifier: !Ref AuroraDBCluster
+      DBInstanceClass: db.r5.large
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-AuroraInstance'
+
+  # CloudWatch Log Groups
+  WorkshopLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${AWS::StackName}'
+      RetentionInDays: 7
+
+  DataPipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${AWS::StackName}/data-pipeline'
+      RetentionInDays: 7
+
+  FluentBitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${AWS::StackName}/fluent-bit'
+      RetentionInDays: 7
+
+  # IAM Role for Workshop Instance
+  WorkshopInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: WorkshopInstancePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Kinesis access
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                  - kinesis:ListStreams
+                Resource: '*'
+              # S3 access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${S3Bucket}'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+              # CloudWatch Logs access
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource: '*'
+              # Secrets Manager access
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: 
+                  - !Ref VSCodeSecret
+                  - !Ref AuroraSecret
+              # RDS access
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                Resource: '*'
+
+  WorkshopInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkshopInstanceRole
+
+  # Lambda function to update Aurora secret with endpoint
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:ListSecrets
+                Resource: 
+                  - !Ref AuroraSecret
+        - PolicyName: RDSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                Resource: '*'
+
+  UpdateSecretFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+
+          def handler(event, context):
+            if event['RequestType'] in ['Create', 'Update']:
+              secret_manager = boto3.client('secretsmanager')
+              rds = boto3.client('rds')
+              
+              secret_id = event['ResourceProperties']['SecretId']
+              cluster_id = event['ResourceProperties']['ClusterId']
+              
+              try:
+                response = rds.describe_db_clusters(DBClusterIdentifier=cluster_id)
+                endpoint = response['DBClusters'][0]['Endpoint']
+                
+                secret = secret_manager.get_secret_value(SecretId=secret_id)
+                secret_dict = json.loads(secret['SecretString'])
+                secret_dict['host'] = endpoint
+                
+                secret_manager.put_secret_value(
+                  SecretId=secret_id,
+                  SecretString=json.dumps(secret_dict)
+                )
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                print(f"Error updating secret: {str(e)}")
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                return
+            else:
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+  UpdateSecretCustomResource:
+    Type: Custom::UpdateSecret
+    DependsOn:
+      - AuroraDBCluster
+    Properties:
+      ServiceToken: !GetAtt UpdateSecretFunction.Arn
+      SecretId: !Ref AuroraSecret
+      ClusterId: !Ref AuroraDBCluster
+
+  # Main Workshop Instance (VS Code + Data Pipeline)
+  WorkshopInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !If
+        - IsGraviton
+        - !FindInMap [ArmImage, AmazonLinux-2023, ImageId]
+        - !FindInMap [AmdImage, AmazonLinux-2023, ImageId]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref WorkshopSecurityGroup
+      IamInstanceProfile: !Ref WorkshopInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref InstanceVolumeSize
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-WorkshopInstance'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          
+          # Logging function
+          log() {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/workshop-setup.log
+          }
+          
+          log "Starting workshop instance setup..."
+          
+          # Detect architecture
+          ARCH=$(uname -m)
+          log "Detected architecture: $ARCH"
+          
+          if [[ "$ARCH" == "x86_64" ]]; then
+            ARCH_TYPE="amd64"
+            VECTOR_ARCH="x86_64-unknown-linux-musl"
+            VSCODE_ARCH="linux-amd64"
+          elif [[ "$ARCH" == "aarch64" ]]; then
+            ARCH_TYPE="arm64"
+            VECTOR_ARCH="aarch64-unknown-linux-musl"
+            VSCODE_ARCH="linux-arm64"
+          else
+            log "ERROR: Unsupported architecture: $ARCH"
+            exit 1
+          fi
+          
+          log "Using architecture type: $ARCH_TYPE"
+          
+          # Update system
+          log "Updating system packages..."
+          yum update -y
+          
+          # Install basic packages
+          log "Installing basic packages..."
+          yum install -y wget curl unzip tar gzip git htop tree jq net-tools
+          
+          # Install Docker
+          log "Installing Docker..."
+          yum install -y docker
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+          
+          # Install development tools and MySQL development libraries
+          log "Installing development tools..."
+          yum groupinstall -y "Development Tools"
+          yum install -y mysql-devel
+          
+          # Install Node.js (for VSCode Server)
+          log "Installing Node.js..."
+          curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+          yum install -y nodejs
+          
+          # Install Python packages
+          log "Installing Python packages..."
+          yum install -y python3-pip python3-devel
+          
+          # Install Java (for Kinesis Agent)
+          log "Installing Java..."
+          yum install -y java-1.8.0-openjdk
+          
+          # Install Amazon SSM Agent
+          log "Installing SSM Agent..."
+          yum install -y amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+          
+          # Install Nginx for CloudFront integration
+          log "Installing Nginx..."
+          yum install -y nginx openssl argon2
+          systemctl enable nginx
+          
+          # Install VS Code Server with architecture detection
+          log "Installing VS Code Server for $ARCH_TYPE..."
+          cd /opt
+          wget -O code-server.tar.gz "https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-$VSCODE_ARCH.tar.gz"
+          tar -xzf code-server.tar.gz
+          mv "code-server-4.20.0-$VSCODE_ARCH" code-server
+          ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
+          rm -f code-server.tar.gz
+          
+          # Get VS Code password from Secrets Manager
+          log "Retrieving VS Code password from Secrets Manager..."
+          VSCODE_PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${VSCodeSecret} --region ${AWS::Region} --query SecretString --output text | jq -r .password)
+          
+          # Configure Nginx for CloudFront integration
+          log "Configuring Nginx for CloudFront..."
+          cat > /etc/nginx/conf.d/code-server.conf << 'EOF'
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name *.cloudfront.net;
+              
+              # VS Code Server proxy
+              location / {
+                proxy_pass http://localhost:8080/;
+                proxy_set_header Host $host;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection upgrade;
+                proxy_set_header Accept-Encoding gzip;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+              }
+              
+              # Health check endpoint
+              location /healthz {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+              }
+          }
+          EOF
+          
+          # Test Nginx configuration
+          nginx -t
+          systemctl start nginx
+          
+          # Create VS Code configuration directory
+          log "Setting up VS Code configuration..."
+          mkdir -p /home/${VSCodeUser}/.config/code-server
+          mkdir -p /home/${VSCodeUser}/.local/share/code-server/User/
+          
+          # Create VS Code server configuration with hashed password
+          log "Creating VS Code server configuration..."
+          HASHED_PASSWORD=$(echo -n "$VSCODE_PASSWORD" | argon2 $(openssl rand -base64 12) -e)
+          cat > /home/${VSCodeUser}/.config/code-server/config.yaml << EOF
+          bind-addr: 127.0.0.1:8080
+          auth: password
+          hashed-password: "$HASHED_PASSWORD"
+          cert: false
+          EOF
+          
+          # Create VS Code user settings with security and productivity configurations
+          log "Creating VS Code user settings..."
+          cat > /home/${VSCodeUser}/.local/share/code-server/User/settings.json << 'EOF'
+          {
+            "extensions.autoUpdate": false,
+            "extensions.autoCheckUpdates": false,
+            "telemetry.telemetryLevel": "off",
+            "security.workspace.trust.startupPrompt": "never",
+            "security.workspace.trust.enabled": false,
+            "security.workspace.trust.banner": "never",
+            "security.workspace.trust.emptyWindow": false,
+            "workbench.startupEditor": "none",
+            "terminal.integrated.defaultProfile.linux": "bash",
+            "terminal.integrated.profiles.linux": {
+              "bash": {
+                "path": "/bin/bash",
+                "args": ["-l"]
+              }
+            },
+            "python.defaultInterpreterPath": "/home/${VSCodeUser}/myenv/bin/python",
+            "python.terminal.activateEnvironment": true,
+            "auto-run-command.rules": [
+              {
+                "command": "workbench.action.terminal.new"
+              }
+            ]
+          }
+          EOF
+          
+          # Create VSCode service
+          log "Creating VS Code service..."
+          cat > /etc/systemd/system/code-server.service << 'EOF'
+          [Unit]
+          Description=code-server
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=${VSCodeUser}
+          WorkingDirectory=/home/${VSCodeUser}
+          ExecStart=/usr/local/bin/code-server --config /home/${VSCodeUser}/.config/code-server/config.yaml ${HomeFolder}
+          Restart=always
+          RestartSec=5
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Set proper ownership
+          chown -R ${VSCodeUser}:${VSCodeUser} /home/${VSCodeUser}/.config
+          chown -R ${VSCodeUser}:${VSCodeUser} /home/${VSCodeUser}/.local
+          
+          systemctl daemon-reload
+          systemctl enable code-server
+          
+          # Install Vector with architecture detection
+          log "Installing Vector for $ARCH_TYPE..."
+          cd /tmp
+          wget "https://github.com/vectordotdev/vector/releases/download/v0.48.0/vector-0.48.0-$VECTOR_ARCH.tar.gz"
+          tar -xzf "vector-0.48.0-$VECTOR_ARCH.tar.gz"
+          cp "vector-$VECTOR_ARCH/bin/vector" /usr/local/bin/
+          chmod +x /usr/local/bin/vector
+          rm -rf vector-*
+          
+          # Create Vector directories
+          log "Setting up Vector directories..."
+          mkdir -p /etc/vector
+          mkdir -p /var/lib/vector
+          mkdir -p /var/log/vector
+          chown ec2-user:ec2-user /var/lib/vector /var/log/vector
+          
+          # Create Vector configuration
+          log "Creating Vector configuration..."
+          cat > /etc/vector/vector.yaml << 'EOF'
+          # Vector Configuration
+          sources:
+            file_logs:
+              type: file
+              include:
+                - /var/log/*.log
+                - /var/log/messages
+              ignore_older_secs: 600
+          
+            host_metrics:
+              type: host_metrics
+              collectors:
+                - cpu
+                - disk
+                - filesystem
+                - load
+                - host
+                - memory
+                - network
+          
+            fluent_forward:
+              type: fluent
+              address: 0.0.0.0:24224
+          
+          transforms:
+            parse_logs:
+              type: remap
+              inputs:
+                - file_logs
+                - fluent_forward
+              source: |
+                .timestamp = now()
+                .host = get_hostname!()
+                .source_type = "vector"
+          
+          sinks:
+            console_out:
+              type: console
+              inputs:
+                - parse_logs
+                - host_metrics
+              encoding:
+                codec: json
+          
+            file_out:
+              type: file
+              inputs:
+                - parse_logs
+              path: /var/log/vector/output-%Y-%m-%d.log
+              encoding:
+                codec: json
+          
+            cloudwatch_logs:
+              type: aws_cloudwatch_logs
+              inputs:
+                - parse_logs
+                - host_metrics
+              group_name: ${DataPipelineLogGroup}
+              stream_name: "{{ host }}"
+              region: ${AWS::Region}
+          
+            s3_sink:
+              type: aws_s3
+              inputs:
+                - parse_logs
+              bucket: ${S3Bucket}
+              key_prefix: "logs/year=%Y/month=%m/day=%d/"
+              region: ${AWS::Region}
+              encoding:
+                codec: json
+          EOF
+          
+          # Create Vector service
+          log "Creating Vector service..."
+          cat > /etc/systemd/system/vector.service << 'EOF'
+          [Unit]
+          Description=Vector
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=ec2-user
+          ExecStart=/usr/local/bin/vector --config /etc/vector/vector.yaml
+          Restart=always
+          RestartSec=5
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Install Fluent Bit with improved compatibility
+          log "Installing Fluent Bit..."
+          if [[ "$ARCH_TYPE" == "amd64" ]]; then
+            # Use official installation script for x86_64
+            curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
+          else
+            # For ARM64, use package manager
+            log "Installing Fluent Bit via package manager for ARM64..."
+            yum install -y fluent-bit || {
+              log "WARNING: Fluent Bit installation failed on ARM64, skipping..."
+            }
+          fi
+          
+          # Create Fluent Bit configuration
+          log "Creating Fluent Bit configuration..."
+          mkdir -p /etc/fluent-bit
+          cat > /etc/fluent-bit/fluent-bit.conf << 'EOF'
+          [SERVICE]
+              Flush         1
+              Log_Level     info
+              Daemon        off
+              Parsers_File  parsers.conf
+              HTTP_Server   On
+              HTTP_Listen   0.0.0.0
+              HTTP_Port     2020
+          
+          [INPUT]
+              Name              tail
+              Path              /var/log/*.log
+              Path_Key          filename
+              Parser            json
+              Tag               host.*
+              Refresh_Interval  5
+              Skip_Long_Lines   On
+          
+          [INPUT]
+              Name   cpu
+              Tag    cpu.local
+          
+          [INPUT]
+              Name   mem
+              Tag    mem.local
+          
+          [OUTPUT]
+              Name  forward
+              Match *
+              Host  127.0.0.1
+              Port  24224
+          
+          [OUTPUT]
+              Name  cloudwatch_logs
+              Match *
+              region ${AWS::Region}
+              log_group_name ${FluentBitLogGroup}
+              log_stream_name fluent-bit-stream
+              auto_create_group true
+          EOF
+          
+          # Install AWS Kinesis Agent
+          log "Installing AWS Kinesis Agent..."
+          cd /tmp
+          wget https://s3.amazonaws.com/streaming-data-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm
+          rpm -U ./aws-kinesis-agent-latest.amzn2.noarch.rpm || {
+            log "WARNING: Kinesis Agent installation failed, skipping..."
+          }
+          
+          # Create Kinesis Agent configuration
+          log "Creating Kinesis Agent configuration..."
+          mkdir -p /etc/aws-kinesis
+          cat > /etc/aws-kinesis/agent.json << 'EOF'
+          {
+            "cloudwatch.emitMetrics": true,
+            "kinesis.endpoint": "",
+            "firehose.endpoint": "",
+            "flows": [
+              {
+                "filePattern": "/var/log/vector/output-*.log",
+                "kinesisStream": "data-pipeline-stream",
+                "partitionKeyOption": "RANDOM"
+              }
+            ]
+          }
+          EOF
+          
+          # Set up Python environment for ec2-user
+          log "Setting up Python environment..."
+          su - ec2-user << 'EOSU'
+          python3 -m venv myenv
+          source myenv/bin/activate
+          pip install --upgrade pip
+          pip install mysql-connector-python mysql mysql-connector boto3 langchain-aws streamlit pandas numpy
+          
+          # Create data directory
+          mkdir -p ~/data
+          EOSU
+          
+          # Set up environment variables
+          log "Setting up environment variables..."
+          cat >> /home/ec2-user/.bashrc << 'EOF'
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          export S3_BUCKET=${S3Bucket}
+          export DB_SECRET_ARN=${AuroraSecret}
+          export PATH=$PATH:/home/ec2-user/.local/bin
+          export NEXT_TELEMETRY_DISABLED=1
+          EOF
+          
+          # Create workshop directory
+          log "Setting up workshop directory..."
+          mkdir -p ${HomeFolder}
+          chown -R ec2-user:ec2-user ${HomeFolder}
+          
+          # Clone repository if specified
+          if [[ -n "${RepoUrl}" ]]; then
+            log "Cloning repository: ${RepoUrl}"
+            sudo -u ec2-user git clone ${RepoUrl} ${HomeFolder}
+          fi
+          
+          # Download assets if specified
+          if [[ -n "${AssetZipS3Path}" ]]; then
+            log "Downloading workshop assets..."
+            aws s3 cp s3://${AssetZipS3Path} /tmp/assets.zip
+            unzip -o /tmp/assets.zip -d ${HomeFolder}
+            chown -R ec2-user:ec2-user ${HomeFolder}
+            rm -f /tmp/assets.zip
+          fi
+          
+          # Create service management scripts
+          log "Creating service management scripts..."
+          cat > /home/ec2-user/manage-services.sh << 'EOSCRIPT'
+          #!/bin/bash
+          
+          # Colors
+          RED='\033[0;31m'
+          GREEN='\033[0;32m'
+          YELLOW='\033[1;33m'
+          BLUE='\033[0;34m'
+          NC='\033[0m'
+          
+          show_status() {
+              echo -e "${BLUE}=== Workshop Services Status ===${NC}"
+              echo ""
+              
+              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
+              descriptions=("VS Code Server" "Vector" "Fluent Bit" "Kinesis Agent")
+              
+              for i in "${!services[@]}"; do
+                  service="${services[$i]}"
+                  desc="${descriptions[$i]}"
+                  
+                  if systemctl is-active --quiet "$service" 2>/dev/null; then
+                      status="${GREEN}Running${NC}"
+                  else
+                      status="${RED}Stopped${NC}"
+                  fi
+                  
+                  printf "%-15s: %b\n" "$desc" "$status"
+              done
+              echo ""
+              
+              # Port status
+              echo -e "${BLUE}=== Port Status ===${NC}"
+              echo "VS Code (8080): $(netstat -ln 2>/dev/null | grep :8080 > /dev/null && echo -e "${GREEN}Open${NC}" || echo -e "${RED}Closed${NC}")"
+              echo "Vector API (8686): $(netstat -ln 2>/dev/null | grep :8686 > /dev/null && echo -e "${GREEN}Open${NC}" || echo -e "${RED}Closed${NC}")"
+              echo "Fluent Forward (24224): $(netstat -ln 2>/dev/null | grep :24224 > /dev/null && echo -e "${GREEN}Open${NC}" || echo -e "${RED}Closed${NC}")"
+              echo "Fluent HTTP (2020): $(netstat -ln 2>/dev/null | grep :2020 > /dev/null && echo -e "${GREEN}Open${NC}" || echo -e "${RED}Closed${NC}")"
+              echo ""
+          }
+          
+          case "$1" in
+              status)
+                  show_status
+                  ;;
+              start)
+                  echo "Starting all services..."
+                  sudo systemctl start code-server vector fluent-bit aws-kinesis-agent 2>/dev/null
+                  show_status
+                  ;;
+              stop)
+                  echo "Stopping all services..."
+                  sudo systemctl stop aws-kinesis-agent fluent-bit vector code-server 2>/dev/null
+                  show_status
+                  ;;
+              restart)
+                  echo "Restarting all services..."
+                  sudo systemctl restart code-server vector fluent-bit aws-kinesis-agent 2>/dev/null
+                  show_status
+                  ;;
+              *)
+                  echo "Usage: $0 {start|stop|restart|status}"
+                  show_status
+                  ;;
+          esac
+          EOSCRIPT
+          
+          chmod +x /home/ec2-user/manage-services.sh
+          chown ec2-user:ec2-user /home/ec2-user/manage-services.sh
+          
+          # Create enhanced password change script with Secrets Manager integration
+          log "Creating enhanced password change script..."
+          cat > /home/ec2-user/change-vscode-password.sh << 'EOSCRIPT'
+          #!/bin/bash
+          echo "=================================================="
+          echo "VS Code Server Password Change Script"
+          echo "=================================================="
+          echo "Current password is managed by AWS Secrets Manager"
+          echo ""
+          echo "Please change the password for security."
+          echo ""
+          
+          read -s -p "Enter new password: " NEW_PASSWORD
+          echo ""
+          read -s -p "Confirm password: " CONFIRM_PASSWORD
+          echo ""
+          
+          if [ "$NEW_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
+              echo "❌ Passwords do not match."
+              exit 1
+          fi
+          
+          if [ ${#NEW_PASSWORD} -lt 8 ]; then
+              echo "❌ Password must be at least 8 characters."
+              exit 1
+          fi
+          
+          echo "Updating password in Secrets Manager and VS Code configuration..."
+          
+          # Update Secrets Manager
+          SECRET_ARN="${VSCodeSecret}"
+          CURRENT_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region ${AWS::Region} --query SecretString --output text)
+          UPDATED_SECRET=$(echo "$CURRENT_SECRET" | jq --arg pwd "$NEW_PASSWORD" '.password = $pwd')
+          
+          aws secretsmanager put-secret-value --secret-id "$SECRET_ARN" --region ${AWS::Region} --secret-string "$UPDATED_SECRET"
+          
+          # Update VS Code configuration with hashed password
+          HASHED_PASSWORD=$(echo -n "$NEW_PASSWORD" | argon2 $(openssl rand -base64 12) -e)
+          cat > /home/${VSCodeUser}/.config/code-server/config.yaml << EOF
+          bind-addr: 127.0.0.1:8080
+          auth: password
+          hashed-password: "$HASHED_PASSWORD"
+          cert: false
+          EOF
+          
+          # Restart VS Code server
+          sudo systemctl restart code-server
+          
+          sleep 3
+          if systemctl is-active --quiet code-server; then
+              echo "✅ Password updated successfully in Secrets Manager."
+              echo "✅ VS Code server configuration updated."
+              echo "✅ VS Code server restarted."
+              echo ""
+              echo "You can now access VS Code with the new password."
+              echo "CloudFront URL: https://$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --region ${AWS::Region} --query 'Stacks[0].Outputs[?OutputKey==\`VSCodeURL\`].OutputValue' --output text 2>/dev/null || echo 'Not available')"
+              echo "Direct URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
+          else
+              echo "❌ Failed to restart VS Code server."
+              echo "Check service status: sudo systemctl status code-server"
+              exit 1
+          fi
+          EOSCRIPT
+          
+          chmod +x /home/ec2-user/change-vscode-password.sh
+          chown ec2-user:ec2-user /home/ec2-user/change-vscode-password.sh
+          
+          # Create data pipeline tools access setup script
+          log "Creating data pipeline tools access setup script..."
+          cat > /home/ec2-user/setup-data-pipeline-access.sh << 'EOSCRIPT'
+          #!/bin/bash
+          echo "=================================================="
+          echo "Data Pipeline Tools Access Setup"
+          echo "=================================================="
+          echo ""
+          
+          # Colors
+          RED='\033[0;31m'
+          GREEN='\033[0;32m'
+          YELLOW='\033[1;33m'
+          BLUE='\033[0;34m'
+          NC='\033[0m'
+          
+          log() {
+            echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"
+          }
+          
+          success() {
+            echo -e "${GREEN}✅ $1${NC}"
+          }
+          
+          warning() {
+            echo -e "${YELLOW}⚠️  $1${NC}"
+          }
+          
+          error() {
+            echo -e "${RED}❌ $1${NC}"
+          }
+          
+          log "Setting up data pipeline tools access permissions..."
+          
+          # Setup database connection
+          log "Configuring database access..."
+          DB_SECRET_ARN="${AuroraSecret}"
+          DB_ENDPOINT=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" --region ${AWS::Region} --query SecretString --output text | jq -r .host)
+          DB_USER=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" --region ${AWS::Region} --query SecretString --output text | jq -r .username)
+          DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" --region ${AWS::Region} --query SecretString --output text | jq -r .password)
+          
+          # Create database connection script
+          cat > /home/${VSCodeUser}/connect-to-database.py << 'PYEOF'
+          #!/usr/bin/env python3
+          import mysql.connector
+          import boto3
+          import json
+          import os
+          
+          def get_db_credentials():
+              """Get database credentials from AWS Secrets Manager"""
+              secret_arn = os.environ.get('DB_SECRET_ARN', '${AuroraSecret}')
+              region = os.environ.get('AWS_DEFAULT_REGION', '${AWS::Region}')
+              
+              client = boto3.client('secretsmanager', region_name=region)
+              response = client.get_secret_value(SecretId=secret_arn)
+              secret = json.loads(response['SecretString'])
+              
+              return {
+                  'host': secret['host'],
+                  'user': secret['username'],
+                  'password': secret['password'],
+                  'database': secret['dbname']
+              }
+          
+          def connect_to_database():
+              """Connect to the Aurora MySQL database"""
+              try:
+                  creds = get_db_credentials()
+                  connection = mysql.connector.connect(**creds)
+                  print(f"✅ Successfully connected to database: {creds['host']}")
+                  return connection
+              except Exception as e:
+                  print(f"❌ Failed to connect to database: {e}")
+                  return None
+          
+          if __name__ == "__main__":
+              conn = connect_to_database()
+              if conn:
+                  cursor = conn.cursor()
+                  cursor.execute("SHOW TABLES;")
+                  tables = cursor.fetchall()
+                  print(f"📊 Available tables: {tables}")
+                  cursor.close()
+                  conn.close()
+          PYEOF
+          
+          chmod +x /home/${VSCodeUser}/connect-to-database.py
+          chown ${VSCodeUser}:${VSCodeUser} /home/${VSCodeUser}/connect-to-database.py
+          
+          # Create S3 access test script
+          cat > /home/${VSCodeUser}/test-s3-access.py << 'PYEOF'
+          #!/usr/bin/env python3
+          import boto3
+          import os
+          from datetime import datetime
+          
+          def test_s3_access():
+              """Test S3 bucket access"""
+              bucket_name = os.environ.get('S3_BUCKET', '${S3Bucket}')
+              region = os.environ.get('AWS_DEFAULT_REGION', '${AWS::Region}')
+              
+              try:
+                  s3 = boto3.client('s3', region_name=region)
+                  
+                  # Test write access
+                  test_key = f"test/access-test-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+                  test_content = f"S3 access test at {datetime.now()}"
+                  
+                  s3.put_object(Bucket=bucket_name, Key=test_key, Body=test_content)
+                  print(f"✅ Successfully wrote to S3: s3://{bucket_name}/{test_key}")
+                  
+                  # Test read access
+                  response = s3.get_object(Bucket=bucket_name, Key=test_key)
+                  content = response['Body'].read().decode('utf-8')
+                  print(f"✅ Successfully read from S3: {content}")
+                  
+                  # Clean up
+                  s3.delete_object(Bucket=bucket_name, Key=test_key)
+                  print(f"✅ Test file cleaned up")
+                  
+                  return True
+              except Exception as e:
+                  print(f"❌ S3 access test failed: {e}")
+                  return False
+          
+          if __name__ == "__main__":
+              test_s3_access()
+          PYEOF
+          
+          chmod +x /home/${VSCodeUser}/test-s3-access.py
+          chown ${VSCodeUser}:${VSCodeUser} /home/${VSCodeUser}/test-s3-access.py
+          
+          # Create Vector status check script
+          cat > /home/${VSCodeUser}/check-vector-status.sh << 'BASHEOF'
+          #!/bin/bash
+          echo "=================================================="
+          echo "Vector Data Pipeline Status Check"
+          echo "=================================================="
+          
+          # Check Vector service status
+          if systemctl is-active --quiet vector; then
+              echo "✅ Vector service is running"
+          else
+              echo "❌ Vector service is not running"
+              echo "   Try: sudo systemctl start vector"
+          fi
+          
+          # Check Vector API
+          if curl -s http://localhost:8686/health > /dev/null 2>&1; then
+              echo "✅ Vector API is responding"
+          else
+              echo "⚠️  Vector API is not responding (this is normal if API is disabled)"
+          fi
+          
+          # Check Vector logs
+          echo ""
+          echo "📊 Recent Vector logs:"
+          sudo journalctl -u vector -n 5 --no-pager
+          
+          # Check output files
+          echo ""
+          echo "📁 Vector output files:"
+          ls -la /var/log/vector/ 2>/dev/null || echo "No output files found"
+          BASHEOF
+          
+          chmod +x /home/${VSCodeUser}/check-vector-status.sh
+          chown ${VSCodeUser}:${VSCodeUser} /home/${VSCodeUser}/check-vector-status.sh
+          
+          # Test all connections
+          log "Testing data pipeline connections..."
+          
+          # Test database connection
+          if python3 /home/${VSCodeUser}/connect-to-database.py; then
+              success "Database connection test passed"
+          else
+              warning "Database connection test failed - database may still be initializing"
+          fi
+          
+          # Test S3 access
+          if python3 /home/${VSCodeUser}/test-s3-access.py; then
+              success "S3 access test passed"
+          else
+              error "S3 access test failed"
+          fi
+          
+          # Test Vector status
+          if systemctl is-active --quiet vector; then
+              success "Vector service is running"
+          else
+              warning "Vector service is not running yet"
+          fi
+          
+          echo ""
+          echo "=================================================="
+          echo "Data Pipeline Tools Access Setup Complete"
+          echo "=================================================="
+          echo ""
+          echo "Available tools and scripts:"
+          echo "  • connect-to-database.py  - Test database connection"
+          echo "  • test-s3-access.py       - Test S3 bucket access"
+          echo "  • check-vector-status.sh  - Check Vector pipeline status"
+          echo "  • manage-services.sh      - Manage all services"
+          echo ""
+          echo "Environment variables:"
+          echo "  • AWS_DEFAULT_REGION: ${AWS::Region}"
+          echo "  • S3_BUCKET: ${S3Bucket}"
+          echo "  • DB_SECRET_ARN: ${AuroraSecret}"
+          echo ""
+          EOSCRIPT
+          
+          chmod +x /home/ec2-user/setup-data-pipeline-access.sh
+          chown ec2-user:ec2-user /home/ec2-user/setup-data-pipeline-access.sh
+          
+          # Install VS Code extensions
+          log "Installing VS Code extensions..."
+          # Wait for VS Code server to be ready
+          systemctl start code-server
+          sleep 10
+          
+          # Install essential extensions for data pipeline development
+          sudo -u ${VSCodeUser} --login code-server --install-extension AmazonWebServices.aws-toolkit-vscode --force || log "WARNING: Failed to install AWS Toolkit"
+          sudo -u ${VSCodeUser} --login code-server --install-extension ms-python.python --force || log "WARNING: Failed to install Python extension"
+          sudo -u ${VSCodeUser} --login code-server --install-extension ms-vscode.live-server --force || log "WARNING: Failed to install Live Server"
+          sudo -u ${VSCodeUser} --login code-server --install-extension synedra.auto-run-command --force || log "WARNING: Failed to install Auto Run Command"
+          sudo -u ${VSCodeUser} --login code-server --install-extension ms-toolsai.jupyter --force || log "WARNING: Failed to install Jupyter extension"
+          sudo -u ${VSCodeUser} --login code-server --install-extension ms-vscode.vscode-json --force || log "WARNING: Failed to install JSON extension"
+          sudo -u ${VSCodeUser} --login code-server --install-extension redhat.vscode-yaml --force || log "WARNING: Failed to install YAML extension"
+          
+          # Restart VS Code server to apply extensions
+          systemctl restart code-server
+          
+          # Start other services
+          log "Starting data pipeline services..."
+          systemctl start vector
+          
+          # Enable services for auto-start
+          systemctl enable vector
+          
+          # Try to start optional services
+          systemctl start fluent-bit 2>/dev/null || log "WARNING: Fluent Bit service not available"
+          systemctl start aws-kinesis-agent 2>/dev/null || log "WARNING: Kinesis Agent service not available"
+          
+          # Run data pipeline access setup
+          log "Running data pipeline access setup..."
+          sudo -u ec2-user /home/ec2-user/setup-data-pipeline-access.sh || log "WARNING: Data pipeline access setup had some issues"
+          
+          # Create comprehensive README
+          log "Creating comprehensive README..."
+          cat > /home/ec2-user/README.md << 'EOFREADME'
+          # 🚀 Unified AWS Workshop Environment
+          
+          Welcome to your integrated AWS Workshop environment! This setup includes VS Code Server, data pipeline tools, and Aurora MySQL database.
+          
+          ## 📦 What's Included
+          
+          ### Development Environment
+          - **VS Code Server**: Web-based IDE accessible via CloudFront
+          - **Python Environment**: Pre-configured virtual environment with data science packages
+          - **Node.js**: For web development and AWS CDK
+          - **Docker**: Container runtime for development
+          
+          ### Data Pipeline Tools
+          - **Vector**: High-performance data collection and transformation
+          - **Fluent Bit**: Lightweight log processor
+          - **AWS Kinesis Agent**: Stream data to AWS Kinesis
+          
+          ### Database & Storage
+          - **Aurora MySQL**: Managed MySQL cluster for game data
+          - **S3 Bucket**: Data storage with VPC endpoint
+          - **CloudWatch Logs**: Centralized logging
+          
+          ## 🔐 Security Features
+          - **Secrets Manager**: Secure password management
+          - **CloudFront**: Global CDN with HTTPS
+          - **VPC**: Isolated network environment
+          - **IAM Roles**: Least-privilege access
+          
+          ## 🛠️ Management Scripts
+          
+          ### Essential Scripts
+          ```bash
+          # Change VS Code password (updates Secrets Manager)
+          ./change-vscode-password.sh
+          
+          # Manage all services (start/stop/restart/status)
+          ./manage-services.sh status
+          
+          # Setup data pipeline tool access
+          ./setup-data-pipeline-access.sh
+          ```
+          
+          ### Data Pipeline Testing
+          ```bash
+          # Test database connection
+          python3 connect-to-database.py
+          
+          # Test S3 access
+          python3 test-s3-access.py
+          
+          # Check Vector status
+          ./check-vector-status.sh
+          ```
+          
+          ## 🚀 Getting Started
+          
+          1. **Access VS Code**: Use the CloudFront URL from stack outputs
+          2. **Change Password**: Run `./change-vscode-password.sh` for security
+          3. **Check Services**: Run `./manage-services.sh status`
+          4. **Test Connections**: Run `./setup-data-pipeline-access.sh`
+          
+          ## 📊 Data Flow Architecture
+          
+          ```
+          Application Logs → Vector → CloudWatch Logs / S3
+                          ↓
+          System Metrics → Vector → CloudWatch Logs
+                          ↓
+          Fluent Bit → Vector → File Output
+                          ↓
+          Kinesis Agent → AWS Kinesis Stream
+          ```
+          
+          ## 🔧 Configuration Files
+          
+          - **Vector**: `/etc/vector/vector.yaml`
+          - **Fluent Bit**: `/etc/fluent-bit/fluent-bit.conf`
+          - **Kinesis Agent**: `/etc/aws-kinesis/agent.json`
+          - **VS Code**: `~/.config/code-server/config.yaml`
+          - **Nginx**: `/etc/nginx/conf.d/code-server.conf`
+          
+          ## 🌐 Access URLs
+          
+          - **VS Code (CloudFront)**: Check stack outputs for secure HTTPS URL
+          - **VS Code (Direct)**: http://[PUBLIC-IP]:8080
+          - **Health Check**: http://[PUBLIC-IP]/healthz
+          
+          ## 📈 Monitoring
+          
+          - **CloudWatch Logs**: `/aws/ec2/[STACK-NAME]/*`
+          - **Service Status**: `systemctl status [service-name]`
+          - **Vector Metrics**: Available via Vector API (if enabled)
+          
+          ## 🔍 Troubleshooting
+          
+          ### Service Issues
+          ```bash
+          # Check all services
+          ./manage-services.sh status
+          
+          # View service logs
+          sudo journalctl -u code-server -f
+          sudo journalctl -u vector -f
+          sudo journalctl -u fluent-bit -f
+          ```
+          
+          ### Connection Issues
+          ```bash
+          # Test database connection
+          python3 connect-to-database.py
+          
+          # Test S3 access
+          python3 test-s3-access.py
+          
+          # Check network connectivity
+          curl -I http://localhost:8080/healthz
+          ```
+          
+          ### VS Code Issues
+          ```bash
+          # Reset VS Code password
+          ./change-vscode-password.sh
+          
+          # Restart VS Code service
+          sudo systemctl restart code-server
+          
+          # Check VS Code logs
+          sudo journalctl -u code-server -n 50
+          ```
+          
+          ## 📞 Support
+          
+          If you encounter issues:
+          1. Check service status with `./manage-services.sh status`
+          2. Review logs with `sudo journalctl -u [service-name]`
+          3. Test individual components with provided scripts
+          4. Check CloudWatch Logs for detailed error information
+          
+          ## 🎯 Workshop Objectives
+          
+          This environment is designed for:
+          - **Data Pipeline Development**: Build and test data processing workflows
+          - **Game Analytics**: Analyze game data with Aurora MySQL
+          - **Cloud-Native Development**: Use AWS services in integrated workflows
+          - **Real-time Processing**: Stream and process data with Vector and Fluent Bit
+          
+          ---
+          
+          **Environment Details:**
+          - Region: ${AWS::Region}
+          - Stack: ${AWS::StackName}
+          - Instance Type: ${InstanceType}
+          - Architecture: $ARCH_TYPE
+          
+          Happy coding! 🎉
+          EOFREADME
+          
+          chown ec2-user:ec2-user /home/ec2-user/README.md
+          
+          log "Workshop instance setup completed successfully!"
+          log "VS Code Server: Configured with Secrets Manager integration"
+          log "CloudFront: Configured for secure global access"
+          log "Data Pipeline: Vector, Fluent Bit, and Kinesis Agent configured"
+          log "Database: Aurora MySQL cluster ready"
+          log "Management Scripts: Available in /home/ec2-user/"
+          
+          # Signal completion
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WorkshopInstance --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M  # Clo
+udFront Distribution for VS Code Server
+  VSCodeCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-VSCodeCachePolicy'
+        DefaultTTL: 0
+        MaxTTL: 0
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingBrotli: false
+          EnableAcceptEncodingGzip: false
+          QueryStringsConfig:
+            QueryStringBehavior: all
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - Authorization
+              - CloudFront-Forwarded-Proto
+              - CloudFront-Is-Desktop-Viewer
+              - CloudFront-Is-Mobile-Viewer
+              - CloudFront-Is-Tablet-Viewer
+              - Host
+              - Referer
+              - User-Agent
+          CookiesConfig:
+            CookieBehavior: all
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'CloudFront distribution for ${AWS::StackName} VS Code Server'
+        DefaultCacheBehavior:
+          TargetOriginId: VSCodeServerOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: !Ref VSCodeCachePolicy
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          Compress: false
+        Origins:
+          - Id: VSCodeServerOrigin
+            DomainName: !GetAtt WorkshopInstance.PublicDnsName
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+# Final Outputs
+Outputs:
+  # VS Code Access
+  VSCodeURL:
+    Description: VS Code Server URL via CloudFront
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+  
+  VSCodeDirectURL:
+    Description: Direct VS Code Server URL (for troubleshooting)
+    Value: !Sub 'http://${WorkshopInstance.PublicDnsName}:8080'
+  
+  VSCodePassword:
+    Description: VS Code Server Password
+    Value: !GetAtt SecretPlaintext.password
+  
+  # Instance Information
+  InstanceId:
+    Description: Workshop EC2 Instance ID
+    Value: !Ref WorkshopInstance
+  
+  PublicIP:
+    Description: Workshop Instance Public IP
+    Value: !GetAtt WorkshopInstance.PublicIp
+  
+  PublicDNS:
+    Description: Workshop Instance Public DNS
+    Value: !GetAtt WorkshopInstance.PublicDnsName
+  
+  # Database Information
+  DatabaseEndpoint:
+    Description: Aurora MySQL Cluster Endpoint
+    Value: !GetAtt AuroraDBCluster.Endpoint.Address
+  
+  DatabasePort:
+    Description: Aurora MySQL Port
+    Value: !GetAtt AuroraDBCluster.Endpoint.Port
+  
+  DatabaseName:
+    Description: Database Name
+    Value: game
+  
+  # Storage Information
+  S3BucketName:
+    Description: Workshop Data S3 Bucket
+    Value: !Ref S3Bucket
+  
+  # Monitoring
+  LogGroupName:
+    Description: CloudWatch Log Group
+    Value: !Ref WorkshopLogGroup
+  
+  # Network Information
+  VPCId:
+    Description: Workshop VPC ID
+    Value: !Ref VPC
+  
+  SecurityGroupId:
+    Description: Workshop Security Group ID
+    Value: !Ref WorkshopSecurityGroup

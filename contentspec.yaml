@@ -12,16 +12,20 @@ params:
 
 infrastructure:
   cloudformationTemplates:
-    - templateLocation: static/cfn/vscode-server.yaml
-      label: VSCode
+    - templateLocation: static/cfn/unified-workshop-template.yaml
+      label: Workshop Environment
       participantVisibleStackOutputs:
-        - URL
-        - Password
+        - VSCodeURL
+        - VSCodePassword
+        - DatabaseEndpoint
+        - S3BucketName
       parameters:
         - templateParameter: HomeFolder
           defaultValue: /workshop
         - templateParameter: AssetZipS3Path
           defaultValue: '{{.AssetsBucketName}}/{{.AssetsBucketPrefix}}workshop.zip'
+        - templateParameter: InstanceType
+          defaultValue: t3.medium
 
 awsAccountConfig:
   accountSources:
@@ -79,5 +83,6 @@ awsAccountConfig:
       # [OPTIONAL] Set of regions an event's cloudformation templates should be deployed to.
       # Note: Only 1 deployment region is supported currently. Meaning no more than 1 region can be required.
       # Use this sparingly and only when strictly required for the Workshop content, as this will prevent the content from being run in any other region.
-      required:
+      recommended:
         - us-east-1
+        - ap-northeast-2
