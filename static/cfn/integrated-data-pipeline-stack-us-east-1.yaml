@@ -449,38 +449,83 @@ Resources:
           
           # VSCode Server 설치
           echo "✅ 3단계: VSCode Server 설치 시작"
-          cd /opt
-          curl -L -o code-server.tar.gz https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-linux-amd64.tar.gz
-          tar -xzf code-server.tar.gz
-          mv code-server-4.20.0-linux-amd64 code-server
-          ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
+          
+          # ec2-user로 VSCode Server 설치
+          sudo -u ec2-user bash -c 'curl -fsSL https://code-server.dev/install.sh | sh'
+          
+          # 설치 확인
+          if command -v code-server >/dev/null 2>&1; then
+              echo "✅ VSCode Server 설치 성공"
+          else
+              echo "❌ VSCode Server 설치 실패, 재시도 중..."
+              # 재시도
+              curl -fsSL https://code-server.dev/install.sh | bash -s --
+              if command -v code-server >/dev/null 2>&1; then
+                  echo "✅ VSCode Server 재설치 성공"
+              else
+                  echo "❌ VSCode Server 설치 완전 실패"
+                  exit 1
+              fi
+          fi
+          
           echo "✅ 3단계 완료: VSCode Server 설치"
           
-          # VSCode 서비스 생성
-          echo "✅ 4단계: VSCode 서비스 설정 시작"
-          cat > /etc/systemd/system/code-server.service << 'EOF'
-          [Unit]
-          Description=code-server
-          After=network.target
+          # VSCode 설정 디렉토리 생성 및 설정 파일 생성
+          echo "✅ 4단계: VSCode 설정 및 서비스 설정 시작"
           
-          [Service]
-          Type=simple
-          User=ec2-user
-          WorkingDirectory=/home/ec2-user
-          Environment=PASSWORD=temp123!
-          ExecStart=/usr/local/bin/code-server --bind-addr 0.0.0.0:8080 --auth password
-          Restart=always
+          # 설정 디렉토리 생성
+          mkdir -p /home/ec2-user/.config/code-server
+          mkdir -p /home/ec2-user/.local/share/code-server/User/
+          mkdir -p /home/ec2-user/workspace
           
-          [Install]
-          WantedBy=multi-user.target
+          # VSCode 서버 설정 파일 생성
+          cat > /home/ec2-user/.config/code-server/config.yaml << 'EOF'
+          cert: false
+          auth: password
+          password: temp123!
+          bind-addr: 0.0.0.0:8080
           EOF
           
-          systemctl daemon-reload
-          systemctl enable code-server
-          systemctl start code-server
-          echo "✅ 4단계 완료: VSCode 서비스 설정"
+          # VSCode 사용자 설정 파일 생성
+          cat > /home/ec2-user/.local/share/code-server/User/settings.json << 'EOF'
+          {
+            "extensions.autoUpdate": false,
+            "workbench.colorTheme": "Default Dark+",
+            "terminal.integrated.shell.linux": "/bin/bash",
+            "python.defaultInterpreterPath": "/home/ec2-user/workspace/venv/bin/python",
+            "files.autoSave": "afterDelay",
+            "editor.fontSize": 14,
+            "terminal.integrated.fontSize": 13
+          }
+          EOF
           
-          # 비밀번호 변경 스크립트 생성
+          # 권한 설정
+          chown -R ec2-user:ec2-user /home/ec2-user/.config
+          chown -R ec2-user:ec2-user /home/ec2-user/.local
+          chown -R ec2-user:ec2-user /home/ec2-user/workspace
+          
+          # Python 가상환경 생성 (ec2-user로 실행)
+          sudo -u ec2-user python3 -m venv /home/ec2-user/workspace/venv
+          sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install --upgrade pip
+          sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install pandas numpy matplotlib seaborn streamlit mysql-connector-python boto3
+          
+          # systemd 서비스로 등록 및 시작
+          echo "systemd 서비스 시작 중..."
+          systemctl enable --now code-server@ec2-user
+          
+          # 서비스 시작 대기
+          sleep 5
+          
+          # 필수 VSCode 확장 프로그램 설치
+          echo "VSCode 확장 프로그램 설치 중..."
+          sudo -u ec2-user code-server --install-extension AmazonWebServices.aws-toolkit-vscode --force
+          
+          # 서비스 재시작
+          systemctl restart code-server@ec2-user
+          
+          echo "✅ 4단계 완료: VSCode 설정 및 서비스 설정"
+          
+          # 관리 스크립트 생성
           echo "✅ 5단계: 관리 스크립트 생성 시작"
           cat > /home/ec2-user/change-vscode-password.sh << 'EOF'
           #!/bin/bash
@@ -513,16 +558,15 @@ Resources:
           
           echo "비밀번호를 변경하는 중..."
           
-          # systemd 서비스 파일 업데이트
-          sudo sed -i "s/Environment=PASSWORD=.*/Environment=PASSWORD=$NEW_PASSWORD/" /etc/systemd/system/code-server.service
+          # VSCode 설정 파일 업데이트
+          sed -i "s/password: .*/password: $NEW_PASSWORD/" /home/ec2-user/.config/code-server/config.yaml
           
           # 서비스 재시작
-          sudo systemctl daemon-reload
-          sudo systemctl restart code-server
+          sudo systemctl restart code-server@ec2-user
           
           # 서비스 상태 확인
           sleep 3
-          if systemctl is-active --quiet code-server; then
+          if systemctl is-active --quiet code-server@ec2-user; then
               echo "✅ 비밀번호가 성공적으로 변경되었습니다."
               echo "✅ VSCode 서버가 재시작되었습니다."
               echo ""
@@ -530,7 +574,7 @@ Resources:
               echo "URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
           else
               echo "❌ VSCode 서버 재시작에 실패했습니다."
-              echo "서비스 상태를 확인해주세요: sudo systemctl status code-server"
+              echo "서비스 상태를 확인해주세요: sudo systemctl status code-server@ec2-user"
               exit 1
           fi
           EOF
