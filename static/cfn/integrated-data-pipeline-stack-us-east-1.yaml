@@ -431,25 +431,53 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          yum update -y
           
+          # 모든 출력을 로그 파일에도 저장
+          exec > >(tee /var/log/user-data.log) 2>&1
+          
+          echo "🚀 데이터 파이프라인 환경 설정 시작: $(date)"
+          
+          # 신호 전송 함수
+          send_signal() {
+              local exit_code=$1
+              local message="$2"
+              echo "🔔 CloudFormation 신호 전송: $message (exit_code: $exit_code)"
+              /opt/aws/bin/cfn-signal -e $exit_code --stack ${AWS::StackName} --resource DataPipelineInstance --region ${AWS::Region}
+          }
+          
+          # 오류 발생 시 신호 전송
+          trap 'send_signal 1 "스크립트 실행 중 오류 발생 (라인: $LINENO)"' ERR
+          
+          echo "✅ 1단계: 시스템 업데이트 시작"
+          yum update -y
+          echo "✅ 1단계 완료: 시스템 업데이트"
+          
+          echo "✅ 2단계: 기본 패키지 설치 시작"
           # Install basic packages
           yum install -y wget curl unzip tar gzip git htop tree jq
+          echo "✅ 2단계 완료: 기본 패키지 설치"
           
+          echo "✅ 3단계: Docker 설치 및 설정 시작"
           # Install Docker
           yum install -y docker
           systemctl start docker
           systemctl enable docker
           usermod -a -G docker ec2-user
+          echo "✅ 3단계 완료: Docker 설치 및 설정"
           
+          echo "✅ 4단계: 개발 도구 설치 시작"
           # Install development tools and MySQL development libraries
           yum groupinstall -y "Development Tools"
           yum install -y mysql-devel
+          echo "✅ 4단계 완료: 개발 도구 설치"
           
+          echo "✅ 5단계: Node.js 설치 시작"
           # Install Node.js (for VSCode Server)
           curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
           yum install -y nodejs
+          echo "✅ 5단계 완료: Node.js 설치"
           
+          echo "✅ 6단계: Python 및 SSM Agent 설치 시작"
           # Install Python packages
           yum install -y python3-pip python3-devel
           
@@ -457,13 +485,16 @@ Resources:
           yum install -y amazon-ssm-agent
           systemctl enable amazon-ssm-agent
           systemctl start amazon-ssm-agent
+          echo "✅ 6단계 완료: Python 및 SSM Agent 설치"
           
+          echo "✅ 7단계: VSCode Server 설치 시작"
           # Install VSCode Server
           cd /opt
           wget -O code-server.tar.gz https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-linux-amd64.tar.gz
           tar -xzf code-server.tar.gz
           mv code-server-4.20.0-linux-amd64 code-server
           ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
+          echo "✅ 7단계 완료: VSCode Server 설치"
           
           # Create VSCode service
           cat > /etc/systemd/system/code-server.service << 'EOF'
