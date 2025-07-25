@@ -435,68 +435,29 @@ Resources:
           # 모든 출력을 로그 파일에도 저장
           exec > >(tee /var/log/user-data.log) 2>&1
           
-          echo "🚀 데이터 파이프라인 환경 설정 시작: $(date)"
-          
-          # 신호 전송 함수
-          send_signal() {
-              local exit_code=$1
-              local message="$2"
-              echo "🔔 CloudFormation 신호 전송: $message (exit_code: $exit_code)"
-              /opt/aws/bin/cfn-signal -e $exit_code --stack ${AWS::StackName} --resource DataPipelineInstance --region ${AWS::Region}
-          }
-          
-          # 오류 발생 시 신호 전송
-          trap 'send_signal 1 "스크립트 실행 중 오류 발생 (라인: $LINENO)"' ERR
-          
-          echo "✅ 1단계: 시스템 업데이트 시작"
+          # 기본 패키지 설치
+          echo "✅ 1단계: 기본 패키지 설치 시작"
           yum update -y
-          echo "✅ 1단계 완료: 시스템 업데이트"
+          yum install -y curl unzip tar
+          echo "✅ 1단계 완료: 기본 패키지 설치"
           
-          echo "✅ 2단계: 기본 패키지 설치 시작"
-          # Install basic packages
-          yum install -y wget curl unzip tar gzip git htop tree jq
-          echo "✅ 2단계 완료: 기본 패키지 설치"
-          
-          echo "✅ 3단계: Docker 설치 및 설정 시작"
-          # Install Docker
-          yum install -y docker
-          systemctl start docker
-          systemctl enable docker
-          usermod -a -G docker ec2-user
-          echo "✅ 3단계 완료: Docker 설치 및 설정"
-          
-          echo "✅ 4단계: 개발 도구 설치 시작"
-          # Install development tools and MySQL development libraries
-          yum groupinstall -y "Development Tools"
-          yum install -y mysql-devel
-          echo "✅ 4단계 완료: 개발 도구 설치"
-          
-          echo "✅ 5단계: Node.js 설치 시작"
-          # Install Node.js (for VSCode Server)
+          # Node.js 설치
+          echo "✅ 2단계: Node.js 설치 시작"
           curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
           yum install -y nodejs
-          echo "✅ 5단계 완료: Node.js 설치"
+          echo "✅ 2단계 완료: Node.js 설치"
           
-          echo "✅ 6단계: Python 및 SSM Agent 설치 시작"
-          # Install Python packages
-          yum install -y python3-pip python3-devel
-          
-          # Install Amazon SSM Agent
-          yum install -y amazon-ssm-agent
-          systemctl enable amazon-ssm-agent
-          systemctl start amazon-ssm-agent
-          echo "✅ 6단계 완료: Python 및 SSM Agent 설치"
-          
-          echo "✅ 7단계: VSCode Server 설치 시작"
-          # Install VSCode Server
+          # VSCode Server 설치
+          echo "✅ 3단계: VSCode Server 설치 시작"
           cd /opt
-          wget -O code-server.tar.gz https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-linux-amd64.tar.gz
+          curl -L -o code-server.tar.gz https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-linux-amd64.tar.gz
           tar -xzf code-server.tar.gz
           mv code-server-4.20.0-linux-amd64 code-server
           ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
-          echo "✅ 7단계 완료: VSCode Server 설치"
+          echo "✅ 3단계 완료: VSCode Server 설치"
           
-          # Create VSCode service
+          # VSCode 서비스 생성
+          echo "✅ 4단계: VSCode 서비스 설정 시작"
           cat > /etc/systemd/system/code-server.service << 'EOF'
           [Unit]
           Description=code-server
@@ -516,194 +477,11 @@ Resources:
           
           systemctl daemon-reload
           systemctl enable code-server
+          systemctl start code-server
+          echo "✅ 4단계 완료: VSCode 서비스 설정"
           
-          # Install Vector
-          cd /tmp
-          wget https://github.com/vectordotdev/vector/releases/download/v0.48.0/vector-0.48.0-x86_64-unknown-linux-musl.tar.gz
-          tar -xzf vector-0.48.0-x86_64-unknown-linux-musl.tar.gz
-          cp vector-x86_64-unknown-linux-musl/bin/vector /usr/local/bin/
-          chmod +x /usr/local/bin/vector
-          
-          # Create Vector directories
-          mkdir -p /etc/vector
-          mkdir -p /var/lib/vector
-          mkdir -p /var/log/vector
-          chown ec2-user:ec2-user /var/lib/vector /var/log/vector
-          
-          # Create Vector configuration
-          cat > /etc/vector/vector.yaml << 'EOF'
-          # Vector Configuration
-          sources:
-            file_logs:
-              type: file
-              include:
-                - /var/log/*.log
-                - /var/log/messages
-              ignore_older_secs: 600
-          
-            host_metrics:
-              type: host_metrics
-              collectors:
-                - cpu
-                - disk
-                - filesystem
-                - load
-                - host
-                - memory
-                - network
-          
-            fluent_forward:
-              type: fluent
-              address: 0.0.0.0:24224
-          
-          transforms:
-            parse_logs:
-              type: remap
-              inputs:
-                - file_logs
-                - fluent_forward
-              source: |
-                .timestamp = now()
-                .host = get_hostname!()
-                .source_type = "vector"
-          
-          sinks:
-            console_out:
-              type: console
-              inputs:
-                - parse_logs
-                - host_metrics
-              encoding:
-                codec: json
-          
-            file_out:
-              type: file
-              inputs:
-                - parse_logs
-              path: /var/log/vector/output-%Y-%m-%d.log
-              encoding:
-                codec: json
-          
-            cloudwatch_logs:
-              type: aws_cloudwatch_logs
-              inputs:
-                - parse_logs
-                - host_metrics
-              group_name: /aws/ec2/data-pipeline
-              stream_name: "{{ host }}"
-              region: ${AWS::Region}
-          
-            s3_sink:
-              type: aws_s3
-              inputs:
-                - parse_logs
-              bucket: ${S3Bucket}
-              key_prefix: "logs/year=%Y/month=%m/day=%d/"
-              region: ${AWS::Region}
-              encoding:
-                codec: json
-          EOF
-          
-          # Create Vector service
-          cat > /etc/systemd/system/vector.service << 'EOF'
-          [Unit]
-          Description=Vector
-          After=network.target
-          
-          [Service]
-          Type=simple
-          User=ec2-user
-          ExecStart=/usr/local/bin/vector --config /etc/vector/vector.yaml
-          Restart=always
-          RestartSec=5
-          
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          
-          # Install Fluent Bit
-          curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
-          
-          # Create Fluent Bit configuration
-          cat > /etc/fluent-bit/fluent-bit.conf << 'EOF'
-          [SERVICE]
-              Flush         1
-              Log_Level     info
-              Daemon        off
-              Parsers_File  parsers.conf
-              HTTP_Server   On
-              HTTP_Listen   0.0.0.0
-              HTTP_Port     2020
-          
-          [INPUT]
-              Name              tail
-              Path              /var/log/*.log
-              Path_Key          filename
-              Parser            json
-              Tag               host.*
-              Refresh_Interval  5
-              Skip_Long_Lines   On
-          
-          [INPUT]
-              Name   cpu
-              Tag    cpu.local
-          
-          [INPUT]
-              Name   mem
-              Tag    mem.local
-          
-          [OUTPUT]
-              Name  forward
-              Match *
-              Host  127.0.0.1
-              Port  24224
-          
-          [OUTPUT]
-              Name  cloudwatch_logs
-              Match *
-              region ${AWS::Region}
-              log_group_name /aws/ec2/fluent-bit
-              log_stream_name fluent-bit-stream
-              auto_create_group true
-          EOF
-          
-          # Install AWS Kinesis Agent
-          yum install -y java-1.8.0-openjdk
-          cd /tmp
-          wget https://s3.amazonaws.com/streaming-data-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm
-          rpm -U ./aws-kinesis-agent-latest.amzn2.noarch.rpm
-          
-          # Create Kinesis Agent configuration
-          cat > /etc/aws-kinesis/agent.json << 'EOF'
-          {
-            "cloudwatch.emitMetrics": true,
-            "kinesis.endpoint": "",
-            "firehose.endpoint": "",
-            "flows": [
-              {
-                "filePattern": "/var/log/vector/output-*.log",
-                "kinesisStream": "data-pipeline-stream",
-                "partitionKeyOption": "RANDOM"
-              }
-            ]
-          }
-          EOF
-          
-          # Set up Python environment for ec2-user
-          su - ec2-user << 'EOSU'
-          python3 -m venv myenv
-          source myenv/bin/activate
-          pip install --upgrade pip
-          pip install mysql-connector-python mysql mysql-connector boto3 langchain-aws streamlit pandas numpy
-          
-          # Set AWS region
-          echo "export AWS_DEFAULT_REGION=${AWS::Region}" >> ~/.bashrc
-          
-          # Create data directory
-          mkdir ~/data
-          EOSU
-          
-          # Create password change script
+          # 비밀번호 변경 스크립트 생성
+          echo "✅ 5단계: 관리 스크립트 생성 시작"
           cat > /home/ec2-user/change-vscode-password.sh << 'EOF'
           #!/bin/bash
           echo "=================================================="
@@ -760,251 +538,43 @@ Resources:
           chmod +x /home/ec2-user/change-vscode-password.sh
           chown ec2-user:ec2-user /home/ec2-user/change-vscode-password.sh
           
-          # Create service management script
-          cat > /home/ec2-user/manage-services.sh << 'EOF'
-          #!/bin/bash
-
-          # 색상 함수 정의
-          red() { echo "\033[0;31m$1\033[0m"; }
-          green() { echo "\033[0;32m$1\033[0m"; }
-          yellow() { echo "\033[1;33m$1\033[0m"; }
-          blue() { echo "\033[0;34m$1\033[0m"; }
-          no_color() { echo "\033[0m$1"; }
-
-          show_status() {
-              echo -e "\033[0;34m=== 데이터 파이프라인 서비스 상태 ===\033[0m"
-              echo ""
-              
-              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
-              descriptions=("VSCode Server" "Vector" "Fluent Bit" "Kinesis Agent")
-              
-              for service in code-server vector fluent-bit aws-kinesis-agent; do
-                  case $service in
-                      "code-server") desc="VSCode Server" ;;
-                      "vector") desc="Vector" ;;
-                      "fluent-bit") desc="Fluent Bit" ;;
-                      "aws-kinesis-agent") desc="Kinesis Agent" ;;
-                  esac
-                  
-                  if systemctl is-active --quiet "$service"; then
-                      status=$(green "실행 중")
-                  else
-                      status=$(red "중지됨")
-                  fi
-                  
-                  printf "%-15s: %b\n" "$desc" "$status"
-              done
-              echo ""
-              
-              # 포트 상태 확인
-              echo -e "$(blue "=== 포트 상태 ===")"
-              echo "VSCode (8080): $(netstat -ln | grep :8080 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
-              echo "Vector API (8686): $(netstat -ln | grep :8686 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
-              echo "Fluent Forward (24224): $(netstat -ln | grep :24224 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
-              echo "Fluent HTTP (2020): $(netstat -ln | grep :2020 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
-              echo ""
-          }
-          
-          start_services() {
-              echo -e "$(yellow "모든 서비스를 시작하는 중...")"
-              
-              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
-              
-              for service in code-server vector fluent-bit aws-kinesis-agent; do
-                  echo -n "Starting $service... "
-                  if sudo systemctl start "$service"; then
-                      echo -e "$(green "성공")"
-                  else
-                      echo -e "$(red "실패")"
-                  fi
-              done
-              
-              echo ""
-              echo -e "$(yellow "서비스 자동 시작 설정 중...")"
-              sudo systemctl enable vector fluent-bit aws-kinesis-agent
-              echo ""
-          }
-          
-          stop_services() {
-              echo -e "$(yellow "모든 서비스를 중지하는 중...")"
-              
-              services=("aws-kinesis-agent" "fluent-bit" "vector" "code-server")
-              
-              for service in aws-kinesis-agent fluent-bit vector code-server; do
-                  echo -n "Stopping $service... "
-                  if sudo systemctl stop "$service"; then
-                      echo -e "$(green "성공")"
-                  else
-                      echo -e "$(red "실패")"
-                  fi
-              done
-              echo ""
-          }
-          
-          restart_services() {
-              echo -e "$(yellow "모든 서비스를 재시작하는 중...")"
-              
-              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
-              
-              for service in code-server vector fluent-bit aws-kinesis-agent; do
-                  echo -n "Restarting $service... "
-                  if sudo systemctl restart "$service"; then
-                      echo -e "$(green "성공")"
-                  else
-                      echo -e "$(red "실패")"
-                  fi
-              done
-              echo ""
-          }
-          
-          show_logs() {
-              service="$2"
-              if [ -z "$service" ]; then
-                  echo -e "$(red "서비스 이름을 지정해주세요.")"
-                  echo "사용법: $0 logs <service-name>"
-                  echo "서비스: code-server, vector, fluent-bit, aws-kinesis-agent"
-                  return 1
-              fi
-              
-              echo -e "$(blue "=== $service 로그 (최근 50줄) ===")"
-              sudo journalctl -u "$service" -n 50 --no-pager
-          }
-          
-          show_help() {
-              echo -e "$(blue "데이터 파이프라인 서비스 관리 도구")"
-              echo ""
-              echo "사용법: $0 {start|stop|restart|status|logs|help}"
-              echo ""
-              echo "명령어:"
-              echo "  start    - 모든 서비스 시작"
-              echo "  stop     - 모든 서비스 중지"
-              echo "  restart  - 모든 서비스 재시작"
-              echo "  status   - 서비스 상태 확인"
-              echo "  logs     - 특정 서비스 로그 확인"
-              echo "  help     - 이 도움말 표시"
-              echo ""
-              echo "예제:"
-              echo "  $0 status"
-              echo "  $0 logs vector"
-              echo "  $0 restart"
-              echo ""
-          }
-          
-          case "$1" in
-              start)
-                  start_services
-                  show_status
-                  ;;
-              stop)
-                  stop_services
-                  show_status
-                  ;;
-              restart)
-                  restart_services
-                  show_status
-                  ;;
-              status)
-                  show_status
-                  ;;
-              logs)
-                  show_logs "$@"
-                  ;;
-              help|--help|-h)
-                  show_help
-                  ;;
-              *)
-                  echo -e "$(red "알 수 없는 명령어: $1")"
-                  echo ""
-                  show_help
-                  echo ""
-                  show_status
-                  ;;
-          esac
-          EOF
-          
-          chmod +x /home/ec2-user/manage-services.sh
-          chown ec2-user:ec2-user /home/ec2-user/manage-services.sh
-          
-          # Create README file
+          # README 파일 생성
           cat > /home/ec2-user/README.md << 'EOF'
-          # 🚀 통합 데이터 파이프라인 환경
-          
-          이 CloudFormation 템플릿은 완전한 데이터 파이프라인 환경을 구축합니다.
+          # 🚀 VSCode 서버 환경
           
           ## 📦 설치된 도구들
-          
-          ### 개발 환경
           - **VSCode Server**: 웹 기반 통합 개발 환경 (포트: 8080)
-          - **Python 환경**: 가상환경과 필요한 패키지들
-          
-          ### 데이터 파이프라인 도구
-          - **Vector**: 고성능 데이터 수집 및 변환 도구
-          - **Fluent Bit**: 경량 로그 수집기
-          - **AWS Kinesis Agent**: AWS Kinesis로 데이터 스트리밍
-          
-          ### 데이터베이스 및 스토리지
-          - **Aurora MySQL**: 관리형 MySQL 클러스터
-          - **S3 Bucket**: 데이터 저장소
-          - **CloudWatch Logs**: 로그 모니터링
-          
-          ## 🛠️ 관리 스크립트
-          
-          ### 1. 비밀번호 변경 (필수)
-          ```bash
-          ./change-vscode-password.sh
-          ```
-          
-          ### 2. 서비스 관리
-          ```bash
-          ./manage-services.sh [명령어]
-          ```
+          - **Node.js**: JavaScript 런타임
           
           ## 🚀 시작하기
           
           1. **비밀번호 변경**: `./change-vscode-password.sh`
-          2. **서비스 시작**: `./manage-services.sh start`
-          3. **VSCode 접속**: http://[PUBLIC-IP]:8080
+          2. **VSCode 접속**: http://[PUBLIC-IP]:8080
           
-          ## 📊 데이터 플로우
+          ## 🔧 서비스 관리
           
+          ```bash
+          # 서비스 상태 확인
+          sudo systemctl status code-server
+          
+          # 서비스 재시작
+          sudo systemctl restart code-server
+          
+          # 로그 확인
+          sudo journalctl -u code-server -f
           ```
-          로그 파일 → Vector → CloudWatch Logs / S3
-                   ↓
-          Fluent Bit → Vector → 파일 출력
-                   ↓  
-          Kinesis Agent → Kinesis Stream
-          ```
-          
-          ## 🔧 설정 파일 위치
-          - Vector: /etc/vector/vector.yaml
-          - Fluent Bit: /etc/fluent-bit/fluent-bit.conf
-          - Kinesis Agent: /etc/aws-kinesis/agent.json
           
           ## 📞 지원
-          문제가 발생하면 `./manage-services.sh logs [서비스명]`으로 로그를 확인하세요.
+          문제가 발생하면 `sudo journalctl -u code-server -n 50`으로 로그를 확인하세요.
           EOF
           
           chown ec2-user:ec2-user /home/ec2-user/README.md
+          echo "✅ 5단계 완료: 관리 스크립트 생성"
           
-          # Start only VSCode server initially
-          systemctl start code-server
-          
-          # Signal completion
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource DataPipelineInstance --region ${AWS::Region}
-              echo ""
-
-          }
-
-
-
-              
-              
-              
-
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT20M
-
+          echo "🎉 VSCode 서버 설치 완료!"
+          echo "접속 URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
+          echo "임시 비밀번호: temp123!"
+          echo "반드시 ./change-vscode-password.sh 스크립트로 비밀번호를 변경하세요!"
 Outputs:
   InstanceId:
     Description: Instance ID of the Data Pipeline server
