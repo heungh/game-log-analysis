@@ -1,0 +1,1053 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Integrated CloudFormation template for Data Pipeline with EC2, S3, Aurora MySQL cluster, VSCode, Vector, Fluent Bit, and Kinesis Agent'
+
+Parameters:
+  EC2InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large, m5.large, m5.xlarge]
+    Description: EC2 instance type
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed to access services (default allows all)
+
+Resources:
+  # VPC and Networking
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: DataPipelineVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DataPipelineIGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: DataPipeline-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: DataPipeline-PublicSubnet2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: DataPipeline-PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: DataPipeline-PrivateSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: DataPipeline-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Groups
+  DataPipelineSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Data Pipeline instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCIDR
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AllowedCIDR
+          Description: VSCode Server access
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: !Ref AllowedCIDR
+          Description: Streamlit access
+        - IpProtocol: tcp
+          FromPort: 24224
+          ToPort: 24224
+          CidrIp: 10.0.0.0/16
+          Description: Fluent Bit forward input
+        - IpProtocol: tcp
+          FromPort: 8686
+          ToPort: 8686
+          CidrIp: 10.0.0.0/16
+          Description: Vector API
+        - IpProtocol: tcp
+          FromPort: 2020
+          ToPort: 2020
+          CidrIp: 10.0.0.0/16
+          Description: Fluent Bit HTTP
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.0.0.0/16
+          Description: MySQL access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: DataPipeline-SecurityGroup
+
+  # IAM Roles
+  DataPipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: KinesisAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                  - kinesis:ListStreams
+                Resource: '*'
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource: '*'
+        - PolicyName: LogsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource: '*'
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref AuroraSecret
+
+  DataPipelineInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref DataPipelineRole
+
+  # Lambda Execution Role for Secret Update
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:ListSecrets
+                Resource: 
+                  - !Ref AuroraSecret
+        - PolicyName: RDSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                Resource: '*'
+
+  # Lambda function to update secrets
+  UpdateSecretFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+
+          def handler(event, context):
+            if event['RequestType'] in ['Create', 'Update']:
+              secret_manager = boto3.client('secretsmanager')
+              rds = boto3.client('rds')
+              
+              secret_id = event['ResourceProperties']['SecretId']
+              cluster_id = event['ResourceProperties']['ClusterId']
+              
+              try:
+                response = rds.describe_db_clusters(DBClusterIdentifier=cluster_id)
+                endpoint = response['DBClusters'][0]['Endpoint']
+                
+                secret = secret_manager.get_secret_value(SecretId=secret_id)
+                secret_dict = json.loads(secret['SecretString'])
+                secret_dict['host'] = endpoint
+                
+                secret_manager.put_secret_value(
+                  SecretId=secret_id,
+                  SecretString=json.dumps(secret_dict)
+                )
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                print(f"Error updating secret: {str(e)}")
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                return
+            else:
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+  # S3 Bucket
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'datapipelinebucket${AWS::AccountId}${AWS::Region}'
+      Tags:
+        - Key: Name
+          Value: DataPipeline-S3Bucket
+
+  # Aurora MySQL Cluster
+  AuroraDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora DB
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: DataPipeline-DBSubnetGroup
+
+  # Secrets Manager Secret
+  AuroraSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'gamedb1cluster-${AWS::StackName}'
+      Description: Secrets for Aurora MySQL Cluster
+      SecretString: !Sub '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-${AWS::Region}.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
+
+  AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-mysql
+      DatabaseName: game
+      DBClusterIdentifier: !Sub 'gamedb1cluster-${AWS::StackName}'
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:password}}' ]]
+      DBSubnetGroupName: !Ref AuroraDBSubnetGroup
+      VpcSecurityGroupIds: 
+        - !Ref DataPipelineSecurityGroup
+      Tags:
+        - Key: Name
+          Value: DataPipeline-AuroraCluster
+
+  AuroraDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-mysql
+      DBClusterIdentifier: !Ref AuroraDBCluster
+      DBInstanceClass: db.r5.large
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: DataPipeline-AuroraInstance
+  
+  UpdateSecretCustomResource:
+    Type: Custom::UpdateSecret
+    DependsOn:
+      - AuroraDBCluster
+    Properties:
+      ServiceToken: !GetAtt UpdateSecretFunction.Arn
+      SecretId: !Ref AuroraSecret
+      ClusterId: !Ref AuroraDBCluster
+
+  # S3 VPC Endpoint
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3Bucket}'
+              - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PublicRouteTable
+
+  # CloudWatch Log Groups
+  DataPipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/ec2/data-pipeline
+      RetentionInDays: 7
+
+  FluentBitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/ec2/fluent-bit
+      RetentionInDays: 7
+
+  # EC2 Instance
+  DataPipelineInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0fd26c36a83ae0088  # Amazon Linux 2023 (us-east-1)
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref DataPipelineSecurityGroup
+      IamInstanceProfile: !Ref DataPipelineInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: DataPipelineInstance
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          
+          # Install basic packages
+          yum install -y wget curl unzip tar gzip git htop tree jq
+          
+          # Install Docker
+          yum install -y docker
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+          
+          # Install development tools and MySQL development libraries
+          yum groupinstall -y "Development Tools"
+          yum install -y mysql-devel
+          
+          # Install Node.js (for VSCode Server)
+          curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+          yum install -y nodejs
+          
+          # Install Python packages
+          yum install -y python3-pip python3-devel
+          
+          # Install Amazon SSM Agent
+          yum install -y amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+          
+          # Install VSCode Server
+          cd /opt
+          wget -O code-server.tar.gz https://github.com/coder/code-server/releases/download/v4.20.0/code-server-4.20.0-linux-amd64.tar.gz
+          tar -xzf code-server.tar.gz
+          mv code-server-4.20.0-linux-amd64 code-server
+          ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
+          
+          # Create VSCode service
+          cat > /etc/systemd/system/code-server.service << 'EOF'
+          [Unit]
+          Description=code-server
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user
+          Environment=PASSWORD=temp123!
+          ExecStart=/usr/local/bin/code-server --bind-addr 0.0.0.0:8080 --auth password
+          Restart=always
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          systemctl daemon-reload
+          systemctl enable code-server
+          
+          # Install Vector
+          cd /tmp
+          wget https://github.com/vectordotdev/vector/releases/download/v0.48.0/vector-0.48.0-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf vector-0.48.0-x86_64-unknown-linux-musl.tar.gz
+          cp vector-x86_64-unknown-linux-musl/bin/vector /usr/local/bin/
+          chmod +x /usr/local/bin/vector
+          
+          # Create Vector directories
+          mkdir -p /etc/vector
+          mkdir -p /var/lib/vector
+          mkdir -p /var/log/vector
+          chown ec2-user:ec2-user /var/lib/vector /var/log/vector
+          
+          # Create Vector configuration
+          cat > /etc/vector/vector.yaml << 'EOF'
+          # Vector Configuration
+          sources:
+            file_logs:
+              type: file
+              include:
+                - /var/log/*.log
+                - /var/log/messages
+              ignore_older_secs: 600
+          
+            host_metrics:
+              type: host_metrics
+              collectors:
+                - cpu
+                - disk
+                - filesystem
+                - load
+                - host
+                - memory
+                - network
+          
+            fluent_forward:
+              type: fluent
+              address: 0.0.0.0:24224
+          
+          transforms:
+            parse_logs:
+              type: remap
+              inputs:
+                - file_logs
+                - fluent_forward
+              source: |
+                .timestamp = now()
+                .host = get_hostname!()
+                .source_type = "vector"
+          
+          sinks:
+            console_out:
+              type: console
+              inputs:
+                - parse_logs
+                - host_metrics
+              encoding:
+                codec: json
+          
+            file_out:
+              type: file
+              inputs:
+                - parse_logs
+              path: /var/log/vector/output-%Y-%m-%d.log
+              encoding:
+                codec: json
+          
+            cloudwatch_logs:
+              type: aws_cloudwatch_logs
+              inputs:
+                - parse_logs
+                - host_metrics
+              group_name: /aws/ec2/data-pipeline
+              stream_name: "{{ host }}"
+              region: ${AWS::Region}
+          
+            s3_sink:
+              type: aws_s3
+              inputs:
+                - parse_logs
+              bucket: ${S3Bucket}
+              key_prefix: "logs/year=%Y/month=%m/day=%d/"
+              region: ${AWS::Region}
+              encoding:
+                codec: json
+          EOF
+          
+          # Create Vector service
+          cat > /etc/systemd/system/vector.service << 'EOF'
+          [Unit]
+          Description=Vector
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=ec2-user
+          ExecStart=/usr/local/bin/vector --config /etc/vector/vector.yaml
+          Restart=always
+          RestartSec=5
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Install Fluent Bit
+          curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
+          
+          # Create Fluent Bit configuration
+          cat > /etc/fluent-bit/fluent-bit.conf << 'EOF'
+          [SERVICE]
+              Flush         1
+              Log_Level     info
+              Daemon        off
+              Parsers_File  parsers.conf
+              HTTP_Server   On
+              HTTP_Listen   0.0.0.0
+              HTTP_Port     2020
+          
+          [INPUT]
+              Name              tail
+              Path              /var/log/*.log
+              Path_Key          filename
+              Parser            json
+              Tag               host.*
+              Refresh_Interval  5
+              Skip_Long_Lines   On
+          
+          [INPUT]
+              Name   cpu
+              Tag    cpu.local
+          
+          [INPUT]
+              Name   mem
+              Tag    mem.local
+          
+          [OUTPUT]
+              Name  forward
+              Match *
+              Host  127.0.0.1
+              Port  24224
+          
+          [OUTPUT]
+              Name  cloudwatch_logs
+              Match *
+              region ${AWS::Region}
+              log_group_name /aws/ec2/fluent-bit
+              log_stream_name fluent-bit-stream
+              auto_create_group true
+          EOF
+          
+          # Install AWS Kinesis Agent
+          yum install -y java-1.8.0-openjdk
+          cd /tmp
+          wget https://s3.amazonaws.com/streaming-data-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm
+          rpm -U ./aws-kinesis-agent-latest.amzn2.noarch.rpm
+          
+          # Create Kinesis Agent configuration
+          cat > /etc/aws-kinesis/agent.json << 'EOF'
+          {
+            "cloudwatch.emitMetrics": true,
+            "kinesis.endpoint": "",
+            "firehose.endpoint": "",
+            "flows": [
+              {
+                "filePattern": "/var/log/vector/output-*.log",
+                "kinesisStream": "data-pipeline-stream",
+                "partitionKeyOption": "RANDOM"
+              }
+            ]
+          }
+          EOF
+          
+          # Set up Python environment for ec2-user
+          su - ec2-user << 'EOSU'
+          python3 -m venv myenv
+          source myenv/bin/activate
+          pip install --upgrade pip
+          pip install mysql-connector-python mysql mysql-connector boto3 langchain-aws streamlit pandas numpy
+          
+          # Set AWS region
+          echo "export AWS_DEFAULT_REGION=${AWS::Region}" >> ~/.bashrc
+          
+          # Create data directory
+          mkdir ~/data
+          EOSU
+          
+          # Create password change script
+          cat > /home/ec2-user/change-vscode-password.sh << 'EOF'
+          #!/bin/bash
+          echo "=================================================="
+          echo "VSCode 서버 비밀번호 변경 스크립트"
+          echo "=================================================="
+          echo "현재 임시 비밀번호: temp123!"
+          echo ""
+          echo "보안을 위해 반드시 비밀번호를 변경해주세요."
+          echo ""
+          
+          # 비밀번호 입력
+          read -s -p "새 비밀번호를 입력하세요: " NEW_PASSWORD
+          echo ""
+          read -s -p "비밀번호를 다시 입력하세요: " CONFIRM_PASSWORD
+          echo ""
+          
+          # 비밀번호 확인
+          if [ "$NEW_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
+              echo "❌ 비밀번호가 일치하지 않습니다."
+              exit 1
+          fi
+          
+          # 비밀번호 길이 확인
+          PASSWORD_LENGTH=$(echo -n "$NEW_PASSWORD" | wc -c)
+          if [ $PASSWORD_LENGTH -lt 8 ]; then
+              echo "❌ 비밀번호는 최소 8자 이상이어야 합니다."
+              exit 1
+          fi 
+          
+          echo "비밀번호를 변경하는 중..."
+          
+          # systemd 서비스 파일 업데이트
+          sudo sed -i "s/Environment=PASSWORD=.*/Environment=PASSWORD=$NEW_PASSWORD/" /etc/systemd/system/code-server.service
+          
+          # 서비스 재시작
+          sudo systemctl daemon-reload
+          sudo systemctl restart code-server
+          
+          # 서비스 상태 확인
+          sleep 3
+          if systemctl is-active --quiet code-server; then
+              echo "✅ 비밀번호가 성공적으로 변경되었습니다."
+              echo "✅ VSCode 서버가 재시작되었습니다."
+              echo ""
+              echo "이제 새 비밀번호로 VSCode에 접속할 수 있습니다."
+              echo "URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
+          else
+              echo "❌ VSCode 서버 재시작에 실패했습니다."
+              echo "서비스 상태를 확인해주세요: sudo systemctl status code-server"
+              exit 1
+          fi
+          EOF
+          
+          chmod +x /home/ec2-user/change-vscode-password.sh
+          chown ec2-user:ec2-user /home/ec2-user/change-vscode-password.sh
+          
+          # Create service management script
+          cat > /home/ec2-user/manage-services.sh << 'EOF'
+          #!/bin/bash
+
+          # 색상 함수 정의
+          red() { echo "\033[0;31m$1\033[0m"; }
+          green() { echo "\033[0;32m$1\033[0m"; }
+          yellow() { echo "\033[1;33m$1\033[0m"; }
+          blue() { echo "\033[0;34m$1\033[0m"; }
+          no_color() { echo "\033[0m$1"; }
+
+          show_status() {
+              echo -e "\033[0;34m=== 데이터 파이프라인 서비스 상태 ===\033[0m"
+              echo ""
+              
+              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
+              descriptions=("VSCode Server" "Vector" "Fluent Bit" "Kinesis Agent")
+              
+              for service in code-server vector fluent-bit aws-kinesis-agent; do
+                  case $service in
+                      "code-server") desc="VSCode Server" ;;
+                      "vector") desc="Vector" ;;
+                      "fluent-bit") desc="Fluent Bit" ;;
+                      "aws-kinesis-agent") desc="Kinesis Agent" ;;
+                  esac
+                  
+                  if systemctl is-active --quiet "$service"; then
+                      status=$(green "실행 중")
+                  else
+                      status=$(red "중지됨")
+                  fi
+                  
+                  printf "%-15s: %b\n" "$desc" "$status"
+              done
+              echo ""
+              
+              # 포트 상태 확인
+              echo -e "$(blue "=== 포트 상태 ===")"
+              echo "VSCode (8080): $(netstat -ln | grep :8080 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
+              echo "Vector API (8686): $(netstat -ln | grep :8686 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
+              echo "Fluent Forward (24224): $(netstat -ln | grep :24224 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
+              echo "Fluent HTTP (2020): $(netstat -ln | grep :2020 > /dev/null && echo -e "$(green "열림")" || echo -e "$(red "닫힘")")"
+              echo ""
+          }
+          
+          start_services() {
+              echo -e "$(yellow "모든 서비스를 시작하는 중...")"
+              
+              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
+              
+              for service in code-server vector fluent-bit aws-kinesis-agent; do
+                  echo -n "Starting $service... "
+                  if sudo systemctl start "$service"; then
+                      echo -e "$(green "성공")"
+                  else
+                      echo -e "$(red "실패")"
+                  fi
+              done
+              
+              echo ""
+              echo -e "$(yellow "서비스 자동 시작 설정 중...")"
+              sudo systemctl enable vector fluent-bit aws-kinesis-agent
+              echo ""
+          }
+          
+          stop_services() {
+              echo -e "$(yellow "모든 서비스를 중지하는 중...")"
+              
+              services=("aws-kinesis-agent" "fluent-bit" "vector" "code-server")
+              
+              for service in aws-kinesis-agent fluent-bit vector code-server; do
+                  echo -n "Stopping $service... "
+                  if sudo systemctl stop "$service"; then
+                      echo -e "$(green "성공")"
+                  else
+                      echo -e "$(red "실패")"
+                  fi
+              done
+              echo ""
+          }
+          
+          restart_services() {
+              echo -e "$(yellow "모든 서비스를 재시작하는 중...")"
+              
+              services=("code-server" "vector" "fluent-bit" "aws-kinesis-agent")
+              
+              for service in code-server vector fluent-bit aws-kinesis-agent; do
+                  echo -n "Restarting $service... "
+                  if sudo systemctl restart "$service"; then
+                      echo -e "$(green "성공")"
+                  else
+                      echo -e "$(red "실패")"
+                  fi
+              done
+              echo ""
+          }
+          
+          show_logs() {
+              service="$2"
+              if [ -z "$service" ]; then
+                  echo -e "$(red "서비스 이름을 지정해주세요.")"
+                  echo "사용법: $0 logs <service-name>"
+                  echo "서비스: code-server, vector, fluent-bit, aws-kinesis-agent"
+                  return 1
+              fi
+              
+              echo -e "$(blue "=== $service 로그 (최근 50줄) ===")"
+              sudo journalctl -u "$service" -n 50 --no-pager
+          }
+          
+          show_help() {
+              echo -e "$(blue "데이터 파이프라인 서비스 관리 도구")"
+              echo ""
+              echo "사용법: $0 {start|stop|restart|status|logs|help}"
+              echo ""
+              echo "명령어:"
+              echo "  start    - 모든 서비스 시작"
+              echo "  stop     - 모든 서비스 중지"
+              echo "  restart  - 모든 서비스 재시작"
+              echo "  status   - 서비스 상태 확인"
+              echo "  logs     - 특정 서비스 로그 확인"
+              echo "  help     - 이 도움말 표시"
+              echo ""
+              echo "예제:"
+              echo "  $0 status"
+              echo "  $0 logs vector"
+              echo "  $0 restart"
+              echo ""
+          }
+          
+          case "$1" in
+              start)
+                  start_services
+                  show_status
+                  ;;
+              stop)
+                  stop_services
+                  show_status
+                  ;;
+              restart)
+                  restart_services
+                  show_status
+                  ;;
+              status)
+                  show_status
+                  ;;
+              logs)
+                  show_logs "$@"
+                  ;;
+              help|--help|-h)
+                  show_help
+                  ;;
+              *)
+                  echo -e "$(red "알 수 없는 명령어: $1")"
+                  echo ""
+                  show_help
+                  echo ""
+                  show_status
+                  ;;
+          esac
+          EOF
+          
+          chmod +x /home/ec2-user/manage-services.sh
+          chown ec2-user:ec2-user /home/ec2-user/manage-services.sh
+          
+          # Create README file
+          cat > /home/ec2-user/README.md << 'EOF'
+          # 🚀 통합 데이터 파이프라인 환경
+          
+          이 CloudFormation 템플릿은 완전한 데이터 파이프라인 환경을 구축합니다.
+          
+          ## 📦 설치된 도구들
+          
+          ### 개발 환경
+          - **VSCode Server**: 웹 기반 통합 개발 환경 (포트: 8080)
+          - **Python 환경**: 가상환경과 필요한 패키지들
+          
+          ### 데이터 파이프라인 도구
+          - **Vector**: 고성능 데이터 수집 및 변환 도구
+          - **Fluent Bit**: 경량 로그 수집기
+          - **AWS Kinesis Agent**: AWS Kinesis로 데이터 스트리밍
+          
+          ### 데이터베이스 및 스토리지
+          - **Aurora MySQL**: 관리형 MySQL 클러스터
+          - **S3 Bucket**: 데이터 저장소
+          - **CloudWatch Logs**: 로그 모니터링
+          
+          ## 🛠️ 관리 스크립트
+          
+          ### 1. 비밀번호 변경 (필수)
+          ```bash
+          ./change-vscode-password.sh
+          ```
+          
+          ### 2. 서비스 관리
+          ```bash
+          ./manage-services.sh [명령어]
+          ```
+          
+          ## 🚀 시작하기
+          
+          1. **비밀번호 변경**: `./change-vscode-password.sh`
+          2. **서비스 시작**: `./manage-services.sh start`
+          3. **VSCode 접속**: http://[PUBLIC-IP]:8080
+          
+          ## 📊 데이터 플로우
+          
+          ```
+          로그 파일 → Vector → CloudWatch Logs / S3
+                   ↓
+          Fluent Bit → Vector → 파일 출력
+                   ↓  
+          Kinesis Agent → Kinesis Stream
+          ```
+          
+          ## 🔧 설정 파일 위치
+          - Vector: /etc/vector/vector.yaml
+          - Fluent Bit: /etc/fluent-bit/fluent-bit.conf
+          - Kinesis Agent: /etc/aws-kinesis/agent.json
+          
+          ## 📞 지원
+          문제가 발생하면 `./manage-services.sh logs [서비스명]`으로 로그를 확인하세요.
+          EOF
+          
+          chown ec2-user:ec2-user /home/ec2-user/README.md
+          
+          # Start only VSCode server initially
+          systemctl start code-server
+          
+          # Signal completion
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource DataPipelineInstance --region ${AWS::Region}
+              echo ""
+
+          }
+
+
+
+              
+              
+              
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT20M
+
+Outputs:
+  InstanceId:
+    Description: Instance ID of the Data Pipeline server
+    Value: !Ref DataPipelineInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceId"
+
+  PublicIP:
+    Description: Public IP address of the Data Pipeline server
+    Value: !GetAtt DataPipelineInstance.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicIP"
+
+  VSCodeURL:
+    Description: VSCode Server URL
+    Value: !Sub "http://${DataPipelineInstance.PublicIp}:8080"
+    Export:
+      Name: !Sub "${AWS::StackName}-VSCodeURL"
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub "ssh -i ${KeyName}.pem ec2-user@${DataPipelineInstance.PublicIp}"
+    Export:
+      Name: !Sub "${AWS::StackName}-SSHCommand"
+
+  InitialPassword:
+    Description: Initial VSCode password (change immediately)
+    Value: "temp123!"
+    Export:
+      Name: !Sub "${AWS::StackName}-InitialPassword"
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
+
+  AuroraClusterEndpoint:
+    Description: Aurora Cluster Endpoint
+    Value: !GetAtt AuroraDBCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-AuroraEndpoint"
+
+  AuroraSecretARN:
+    Description: ARN of Aurora Secret
+    Value: !Ref AuroraSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-AuroraSecretARN"
+
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  PublicSubnet1:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet1"
+
+  PublicSubnet2:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2"
+
+  PrivateSubnet1:
+    Description: Private Subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1"
+
+  PrivateSubnet2:
+    Description: Private Subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2"
+
+  S3VPCEndpointId:
+    Description: S3 VPC Endpoint ID
+    Value: !Ref S3Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-S3VPCEndpointId"

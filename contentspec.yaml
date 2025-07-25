@@ -12,13 +12,13 @@ params:
 
 infrastructure:
   cloudformationTemplates:
-    - templateLocation: static/cfn/unified-workshop-template.yaml
-      label: Workshop Environment
+    - templateLocation: static/cfn/integrated-data-pipeline-stack-us-east-1.yaml
+      label: Data Pipeline Environment
       participantVisibleStackOutputs:
         - VSCodeURL
-        - VSCodePassword
-        - DatabaseEndpoint
+        - InitialPassword
         - S3BucketName
+        - AuroraClusterEndpoint
       parameters:
         - templateParameter: HomeFolder
           defaultValue: /workshop
