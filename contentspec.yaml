@@ -20,11 +20,7 @@ infrastructure:
         - S3BucketName
         - AuroraClusterEndpoint
       parameters:
-        - templateParameter: HomeFolder
-          defaultValue: /workshop
-        - templateParameter: AssetZipS3Path
-          defaultValue: '{{.AssetsBucketName}}/{{.AssetsBucketPrefix}}workshop.zip'
-        - templateParameter: InstanceType
+        - templateParameter: EC2InstanceType
           defaultValue: t3.medium
 
 awsAccountConfig:

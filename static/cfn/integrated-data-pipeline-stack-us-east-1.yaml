@@ -8,16 +8,23 @@ Parameters:
     AllowedValues: [t3.micro, t3.small, t3.medium, t3.large, m5.large, m5.xlarge]
     Description: EC2 instance type
 
-  KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Name of an existing EC2 KeyPair to enable SSH access
-
   AllowedCIDR:
     Type: String
     Default: 0.0.0.0/0
     Description: CIDR block allowed to access services (default allows all)
 
 Resources:
+  # Auto-generated Key Pair
+  WorkshopKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${AWS::StackName}-workshop-keypair'
+      KeyType: rsa
+      KeyFormat: pem
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-workshop-keypair'
+
   # VPC and Networking
   VPC:
     Type: AWS::EC2::VPC
@@ -407,7 +414,7 @@ Resources:
     Properties:
       ImageId: ami-0fd26c36a83ae0088  # Amazon Linux 2023 (us-east-1)
       InstanceType: !Ref EC2InstanceType
-      KeyName: !Ref KeyName
+      KeyName: !Ref WorkshopKeyPair
       SubnetId: !Ref PublicSubnet1
       SecurityGroupIds:
         - !Ref DataPipelineSecurityGroup
@@ -988,9 +995,15 @@ Outputs:
 
   SSHCommand:
     Description: SSH command to connect to the instance
-    Value: !Sub "ssh -i ${KeyName}.pem ec2-user@${DataPipelineInstance.PublicIp}"
+    Value: !Sub "ssh -i ${AWS::StackName}-workshop-keypair.pem ec2-user@${DataPipelineInstance.PublicIp}"
     Export:
       Name: !Sub "${AWS::StackName}-SSHCommand"
+
+  KeyPairName:
+    Description: Name of the auto-generated key pair
+    Value: !Ref WorkshopKeyPair
+    Export:
+      Name: !Sub "${AWS::StackName}-KeyPairName"
 
   InitialPassword:
     Description: Initial VSCode password (change immediately)
