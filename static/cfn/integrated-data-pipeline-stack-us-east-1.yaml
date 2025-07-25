@@ -650,11 +650,11 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-KeyPairName"
 
-  InitialPassword:
+  VSCodeInitialPassword:
     Description: Initial VSCode password (change immediately)
     Value: "temp123!"
     Export:
-      Name: !Sub "${AWS::StackName}-InitialPassword"
+      Name: !Sub "${AWS::StackName}-VSCodeInitialPassword"
 
   S3BucketName:
     Description: S3 Bucket Name
