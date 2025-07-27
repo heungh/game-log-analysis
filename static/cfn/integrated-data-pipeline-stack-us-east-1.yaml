@@ -465,16 +465,65 @@ Resources:
           # 모든 출력을 로그 파일에도 저장
           exec > >(tee /var/log/user-data.log) 2>&1
           
+          # Amazon Linux 버전 감지 및 패키지 매니저 설정
+          if grep -q "Amazon Linux release 2023" /etc/system-release 2>/dev/null || [ -f /etc/amazon-linux-release ]; then
+            echo "Amazon Linux 2023 감지됨"
+            PACKAGE_MANAGER="dnf"
+            
+            # Amazon Linux 2023 저장소 문제 해결
+            echo "Amazon Linux 2023 저장소 설정 중..."
+            
+            # 문제가 있는 저장소 비활성화
+            dnf config-manager --disable kernel-livepatch 2>/dev/null || true
+            
+            # 캐시 정리
+            dnf clean all
+            rm -rf /var/cache/dnf/*
+            
+            # 기본 저장소만 사용하여 메타데이터 업데이트
+            dnf makecache --refresh --disablerepo=kernel-livepatch 2>/dev/null || true
+            
+          else
+            echo "Amazon Linux 2 감지됨"
+            PACKAGE_MANAGER="yum"
+            yum clean all
+          fi
+          
           # 기본 패키지 설치
           echo "✅ 1단계: 기본 패키지 설치 시작"
-          yum update -y
-          yum install -y curl unzip tar
+          
+          if [ "$PACKAGE_MANAGER" = "dnf" ]; then
+            # Amazon Linux 2023용 패키지 설치
+            dnf update -y --skip-broken --disablerepo=kernel-livepatch
+            dnf install -y curl unzip tar wget --skip-broken --disablerepo=kernel-livepatch
+            
+            # Java 설치 (Amazon Linux 2023에서는 다른 패키지명 사용)
+            dnf install -y java-11-openjdk --skip-broken --disablerepo=kernel-livepatch || \
+            dnf install -y java-17-openjdk --skip-broken --disablerepo=kernel-livepatch || \
+            echo "Java 설치 실패, 계속 진행..."
+          else
+            # Amazon Linux 2용 패키지 설치
+            yum update -y
+            yum install -y curl unzip tar wget java-11-openjdk
+          fi
+          
           echo "✅ 1단계 완료: 기본 패키지 설치"
           
           # Node.js 설치
           echo "✅ 2단계: Node.js 설치 시작"
-          curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-          yum install -y nodejs
+          
+          if [ "$PACKAGE_MANAGER" = "dnf" ]; then
+            # Amazon Linux 2023용 Node.js 설치
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+            dnf install -y nodejs --skip-broken --disablerepo=kernel-livepatch || \
+            dnf install -y npm --skip-broken --disablerepo=kernel-livepatch || \
+            echo "Node.js 설치 실패, 계속 진행..."
+          else
+            # Amazon Linux 2용 Node.js 설치
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+            yum install -y nodejs
+          fi
+          
           echo "✅ 2단계 완료: Node.js 설치"
           
           # VSCode Server 설치
@@ -535,9 +584,13 @@ Resources:
           chown -R ec2-user:ec2-user /home/ec2-user/workspace
           
           # Python 가상환경 생성 (ec2-user로 실행)
-          sudo -u ec2-user python3 -m venv /home/ec2-user/workspace/venv
-          sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install --upgrade pip
-          sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install pandas numpy matplotlib seaborn streamlit mysql-connector-python boto3
+          if command -v python3 >/dev/null 2>&1; then
+            sudo -u ec2-user python3 -m venv /home/ec2-user/workspace/venv
+            sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install --upgrade pip
+            sudo -u ec2-user /home/ec2-user/workspace/venv/bin/pip install pandas numpy matplotlib seaborn streamlit mysql-connector-python boto3
+          else
+            echo "Python3이 설치되지 않음, 가상환경 생성 건너뜀"
+          fi
           
           # systemd 서비스로 등록 및 시작
           echo "systemd 서비스 시작 중..."
@@ -548,7 +601,7 @@ Resources:
           
           # 필수 VSCode 확장 프로그램 설치
           echo "VSCode 확장 프로그램 설치 중..."
-          sudo -u ec2-user code-server --install-extension AmazonWebServices.aws-toolkit-vscode --force
+          sudo -u ec2-user code-server --install-extension AmazonWebServices.aws-toolkit-vscode --force || echo "확장 프로그램 설치 실패, 계속 진행..."
           
           # 서비스 재시작
           systemctl restart code-server@ec2-user
@@ -629,17 +682,27 @@ Resources:
           
           ```bash
           # 서비스 상태 확인
-          sudo systemctl status code-server
+          sudo systemctl status code-server@ec2-user
           
           # 서비스 재시작
-          sudo systemctl restart code-server
+          sudo systemctl restart code-server@ec2-user
           
           # 로그 확인
-          sudo journalctl -u code-server -f
+          sudo journalctl -u code-server@ec2-user -f
+          ```
+          
+          ## 🛠️ 수동 패키지 설치 (필요시)
+          
+          ```bash
+          # Amazon Linux 2023에서 Java 설치
+          sudo dnf install -y java-11-openjdk --disablerepo=kernel-livepatch
+          
+          # Kinesis Agent 수동 설치
+          sudo dnf install -y aws-kinesis-agent --disablerepo=kernel-livepatch
           ```
           
           ## 📞 지원
-          문제가 발생하면 `sudo journalctl -u code-server -n 50`으로 로그를 확인하세요.
+          문제가 발생하면 `sudo journalctl -u code-server@ec2-user -n 50`으로 로그를 확인하세요.
           EOF
           
           chown ec2-user:ec2-user /home/ec2-user/README.md
@@ -649,6 +712,14 @@ Resources:
           echo "접속 URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
           echo "임시 비밀번호: temp123!"
           echo "반드시 ./change-vscode-password.sh 스크립트로 비밀번호를 변경하세요!"
+          
+          # 설치 상태 요약
+          echo ""
+          echo "=== 설치 상태 요약 ==="
+          echo "VSCode Server: $(command -v code-server >/dev/null 2>&1 && echo '✅ 설치됨' || echo '❌ 설치 실패')"
+          echo "Node.js: $(command -v node >/dev/null 2>&1 && echo '✅ 설치됨' || echo '❌ 설치 실패')"
+          echo "Java: $(command -v java >/dev/null 2>&1 && echo '✅ 설치됨' || echo '❌ 설치 실패')"
+          echo "Python3: $(command -v python3 >/dev/null 2>&1 && echo '✅ 설치됨' || echo '❌ 설치 실패')"
 Outputs:
   InstanceId:
     Description: Instance ID of the Data Pipeline server
