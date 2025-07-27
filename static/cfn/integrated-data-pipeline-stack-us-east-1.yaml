@@ -197,6 +197,12 @@ Resources:
                   - kinesis:PutRecords
                   - kinesis:DescribeStream
                   - kinesis:ListStreams
+                  - kinesis:CreateStream
+                  - kinesis:DeleteStream
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                  - firehose:DescribeDeliveryStream
+                  - firehose:ListDeliveryStreams
                 Resource: '*'
         - PolicyName: S3Access
           PolicyDocument:
@@ -208,6 +214,7 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation
                 Resource: '*'
         - PolicyName: LogsAccess
           PolicyDocument:
@@ -230,6 +237,29 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: !Ref AuroraSecret
+        - PolicyName: AmazonLinux2023RepositoryAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AmazonLinuxRepositoryS3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - "arn:aws:s3:::al2023-repos-*"
+                  - "arn:aws:s3:::al2023-repos-*/*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*/*"
+              - Sid: VPCEndpointAccess
+                Effect: Allow
+                Action:
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeRegions
+                Resource: '*'
 
   DataPipelineInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -435,16 +465,145 @@ Resources:
           # 모든 출력을 로그 파일에도 저장
           exec > >(tee /var/log/user-data.log) 2>&1
           
+          # 시스템 초기화
+          echo "🔧 시스템 초기화 시작"
+          
+          # Wait for cloud-init to complete
+          while [ ! -f /var/lib/cloud/instance/boot-finished ]; do
+            echo "Waiting for cloud-init to complete..."
+            sleep 5
+          done
+          
+          # Configure AWS region
+          export AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+          echo "AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION" >> /etc/environment
+          
+          # Clean up package manager locks and metadata
+          killall -9 yum dnf || true
+          rm -f /var/lib/rpm/.rpm.lock /var/lib/dnf/lock.pid
+          
+          # Detect OS and use appropriate package manager
+          if [ -f /etc/amazon-linux-release ]; then
+            echo "Detected Amazon Linux 2023"
+            PACKAGE_MANAGER="dnf"
+            dnf clean all
+            rm -rf /var/cache/dnf/*
+            
+            # Retry mechanism for dnf operations
+            for i in {1..3}; do
+              echo "Attempt $i: Updating package metadata..."
+              if dnf makecache --refresh; then
+                echo "Package metadata updated successfully"
+                break
+              else
+                echo "Failed to update metadata, retrying in 30 seconds..."
+                sleep 30
+              fi
+            done
+          else
+            echo "Detected Amazon Linux 2"
+            PACKAGE_MANAGER="yum"
+            yum clean all
+            rm -f /var/lib/rpm/__db*
+            rpm --rebuilddb
+          fi
+          
+          echo "🔧 시스템 초기화 완료"
+          
           # 기본 패키지 설치
           echo "✅ 1단계: 기본 패키지 설치 시작"
-          yum update -y
-          yum install -y curl unzip tar
+          
+          # Retry mechanism for package installation
+          retry_count=0
+          max_retries=5
+          
+          while [ $retry_count -lt $max_retries ]; do
+            echo "Attempt $((retry_count + 1)) of $max_retries for system update..."
+            if $PACKAGE_MANAGER update -y --skip-broken; then
+              echo "System update successful"
+              break
+            else
+              echo "System update failed, retrying in 30 seconds..."
+              sleep 30
+              retry_count=$((retry_count + 1))
+              $PACKAGE_MANAGER clean all
+            fi
+          done
+          
+          # Install base packages
+          retry_count=0
+          while [ $retry_count -lt $max_retries ]; do
+            echo "Attempt $((retry_count + 1)) of $max_retries for base package installation..."
+            if $PACKAGE_MANAGER install -y curl unzip tar wget java-11-openjdk; then
+              echo "Base packages installation successful"
+              break
+            else
+              echo "Base packages installation failed, retrying in 30 seconds..."
+              sleep 30
+              retry_count=$((retry_count + 1))
+              $PACKAGE_MANAGER clean all
+            fi
+          done
+          
           echo "✅ 1단계 완료: 기본 패키지 설치"
+          
+          # Kinesis Agent 설치
+          echo "✅ 1.5단계: Kinesis Agent 설치 시작"
+          
+          # Try to install aws-kinesis-agent
+          if $PACKAGE_MANAGER install -y aws-kinesis-agent; then
+            echo "Kinesis Agent installed successfully via $PACKAGE_MANAGER"
+            systemctl enable aws-kinesis-agent
+          else
+            echo "$PACKAGE_MANAGER installation failed, trying manual installation..."
+            
+            # Manual installation
+            cd /tmp
+            if curl -O https://s3.amazonaws.com/kinesis-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm; then
+              echo "Downloaded Kinesis Agent RPM"
+              if rpm -Uvh aws-kinesis-agent-latest.amzn2.noarch.rpm; then
+                echo "Kinesis Agent installed successfully via RPM"
+                systemctl enable aws-kinesis-agent
+              else
+                echo "RPM installation failed, creating basic configuration..."
+                mkdir -p /etc/aws-kinesis
+                mkdir -p /var/log/aws-kinesis-agent
+                
+                # Create basic configuration
+                cat > /etc/aws-kinesis/agent.json << 'KEOF'
+          {
+            "cloudwatch.emitMetrics": true,
+            "kinesis.endpoint": "",
+            "firehose.endpoint": "",
+            "flows": []
+          }
+          KEOF
+                echo "Basic Kinesis Agent configuration created"
+              fi
+            else
+              echo "Failed to download Kinesis Agent RPM"
+            fi
+          fi
+          
+          echo "✅ 1.5단계 완료: Kinesis Agent 설치"
           
           # Node.js 설치
           echo "✅ 2단계: Node.js 설치 시작"
-          curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-          yum install -y nodejs
+          
+          # Install Node.js with retry
+          retry_count=0
+          while [ $retry_count -lt $max_retries ]; do
+            echo "Attempt $((retry_count + 1)) of $max_retries for Node.js installation..."
+            if curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - && $PACKAGE_MANAGER install -y nodejs; then
+              echo "Node.js installation successful"
+              break
+            else
+              echo "Node.js installation failed, retrying in 30 seconds..."
+              sleep 30
+              retry_count=$((retry_count + 1))
+            fi
+          done
+          
           echo "✅ 2단계 완료: Node.js 설치"
           
           # VSCode Server 설치
@@ -589,6 +748,7 @@ Resources:
           ## 📦 설치된 도구들
           - **VSCode Server**: 웹 기반 통합 개발 환경 (포트: 8080)
           - **Node.js**: JavaScript 런타임
+          - **Kinesis Agent**: AWS Kinesis 데이터 스트리밍 에이전트
           
           ## 🚀 시작하기
           
@@ -598,18 +758,25 @@ Resources:
           ## 🔧 서비스 관리
           
           ```bash
-          # 서비스 상태 확인
-          sudo systemctl status code-server
+          # VSCode 서버 상태 확인
+          sudo systemctl status code-server@ec2-user
           
-          # 서비스 재시작
-          sudo systemctl restart code-server
+          # VSCode 서버 재시작
+          sudo systemctl restart code-server@ec2-user
+          
+          # Kinesis Agent 상태 확인
+          sudo systemctl status aws-kinesis-agent
           
           # 로그 확인
-          sudo journalctl -u code-server -f
+          sudo journalctl -u code-server@ec2-user -f
+          sudo journalctl -u aws-kinesis-agent -f
           ```
           
           ## 📞 지원
-          문제가 발생하면 `sudo journalctl -u code-server -n 50`으로 로그를 확인하세요.
+          문제가 발생하면 다음 명령어로 로그를 확인하세요:
+          - VSCode: `sudo journalctl -u code-server@ec2-user -n 50`
+          - Kinesis Agent: `sudo journalctl -u aws-kinesis-agent -n 50`
+          - UserData: `sudo cat /var/log/user-data.log`
           EOF
           
           chown ec2-user:ec2-user /home/ec2-user/README.md
