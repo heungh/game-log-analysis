@@ -321,11 +321,6 @@ batch.timeout_secs = 1
 
 ## 다음 단계
 
-Vector 설치가 완료되면:
+Vector 설치가 완료되면 Amazon Data Firehose를 생성하고 데이터 스트림을 Firehose로 보내는 방법을 진행하게 됩니다.
+Vecotr에 관한 자세한 내용은 [Vector 공식 문서](https://vector.dev/docs/)를 참조하세요.
 
-1. 로그 파싱 규칙 세부 조정
-2. 메트릭 및 알람 설정
-3. 대시보드 구성
-4. 성능 모니터링 설정
-
-자세한 내용은 [Vector 공식 문서](https://vector.dev/docs/)를 참조하세요.

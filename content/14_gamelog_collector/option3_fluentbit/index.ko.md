@@ -393,12 +393,5 @@ curl http://localhost:2020/api/v1/metrics | jq '.output'
 
 ## 다음 단계
 
-Fluent Bit 설치가 완료되면:
-
-1. 로그 파싱 규칙 세부 조정
-2. 메트릭 및 알람 설정
-3. 대시보드 구성
-4. 성능 모니터링 설정
-5. 로그 보존 정책 설정
-
-자세한 내용은 [Fluent Bit 공식 문서](https://docs.fluentbit.io/)를 참조하세요.
+Fluent Bit 설치가 완료되면 Amazon Data Firehose를 생성하고 데이터 스트림을 Firehose로 보내는 방법을 진행하게 됩니다.
+Fluent Bit에 대한 자세한 내용은 [Fluent Bit 공식 문서](https://docs.fluentbit.io/)를 참조하세요.

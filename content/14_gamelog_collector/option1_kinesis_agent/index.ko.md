@@ -177,3 +177,5 @@ sudo tail -f /var/log/aws-kinesis-agent/aws-kinesis-agent.log
 ## 다음 단계
 
 Kinesis Agent 설치가 완료되면 Amazon Data Firehose를 생성하고 데이터 스트림을 Firehose로 보내는 방법을 진행하게 됩니다.
+Kinesis Agent에 관한 자세한 내용은 [Kiensis Agent 공식문서]
+(https://docs.aws.amazon.com/ko_kr/firehose/latest/dev/writing-with-agents.html)를 참조하세요.
