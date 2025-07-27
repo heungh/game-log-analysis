@@ -15,9 +15,10 @@ exec > >(tee -a $LOG_FILE) 2>&1
 
 echo " 1단계: Java 설치 확인 및 설치"
 # Java 8 또는 11 설치 (Kinesis Agent 요구사항)
-if ! java -version 2>&1 | grep -q "openjdk version"; then
-    echo "Java가 설치되어 있지 않습니다. OpenJDK 11을 설치합니다..."
-    yum install -y java-11-amazon-corretto-headless
+if ! java -version 2>&1 | grep -q "openjdk version\|corretto"; then
+    echo "Java가 설치되어 있지 않습니다. Amazon Corretto 11을 설치합니다..."
+    # Amazon Linux 2023에서는 dnf 사용
+    dnf install -y java-11-amazon-corretto-devel
 else
     echo "Java가 이미 설치되어 있습니다."
 fi

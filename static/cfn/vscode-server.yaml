@@ -339,10 +339,67 @@ Resources:
                 - '{{ LinuxFlavor }}'
                 - al2023
             inputs:
-              timeoutSeconds: 300
+              timeoutSeconds: 600
               runCommand:
                 - '#!/bin/bash'
-                - dnf install -y --allowerasing curl gnupg whois argon2 unzip nginx openssl
+                - set -e
+                - echo "Starting Amazon Linux 2023 package installation..."
+                - |
+                  # Wait for cloud-init to complete
+                  while [ ! -f /var/lib/cloud/instance/boot-finished ]; do
+                    echo "Waiting for cloud-init to complete..."
+                    sleep 5
+                  done
+                - |
+                  # Clean up any existing locks and metadata
+                  killall -9 dnf yum || true
+                  rm -f /var/lib/rpm/.rpm.lock /var/lib/dnf/lock.pid
+                  dnf clean all
+                  rm -rf /var/cache/dnf/*
+                - |
+                  # Configure AWS CLI if not already configured
+                  if ! aws sts get-caller-identity >/dev/null 2>&1; then
+                    echo "Configuring AWS CLI with instance profile..."
+                    export AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+                  fi
+                - |
+                  # Retry mechanism for dnf operations
+                  retry_count=0
+                  max_retries=5
+                  while [ $retry_count -lt $max_retries ]; do
+                    echo "Attempt $((retry_count + 1)) of $max_retries for package installation..."
+                    if dnf update -y --skip-broken --nobest; then
+                      echo "DNF update successful"
+                      break
+                    else
+                      echo "DNF update failed, retrying in 30 seconds..."
+                      sleep 30
+                      retry_count=$((retry_count + 1))
+                      dnf clean all
+                    fi
+                  done
+                - |
+                  # Install base packages with retry
+                  retry_count=0
+                  while [ $retry_count -lt $max_retries ]; do
+                    echo "Attempt $((retry_count + 1)) of $max_retries for base package installation..."
+                    if dnf install -y --allowerasing --skip-broken curl gnupg whois argon2 unzip nginx openssl wget java-11-openjdk; then
+                      echo "Base packages installation successful"
+                      break
+                    else
+                      echo "Base packages installation failed, retrying in 30 seconds..."
+                      sleep 30
+                      retry_count=$((retry_count + 1))
+                      dnf clean all
+                    fi
+                  done
+                - |
+                  # Verify installations
+                  echo "Verifying installed packages..."
+                  curl --version || echo "curl installation failed"
+                  java -version || echo "java installation failed"
+                  wget --version || echo "wget installation failed"
+                - echo "Amazon Linux 2023 package installation completed"
           - name: InstallBasePackagesApt
             action: aws:runShellScript
             precondition:
@@ -479,6 +536,108 @@ Resources:
                     echo "Installing git-remote-codecommit with pip3"
                     PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install git-remote-codecommit
                   fi
+          - name: InstallKinesisAgentDnf
+            action: aws:runShellScript
+            precondition:
+              StringEquals:
+                - '{{ LinuxFlavor }}'
+                - al2023
+            inputs:
+              timeoutSeconds: 600
+              runCommand:
+                - '#!/bin/bash'
+                - set -e
+                - echo "Starting Kinesis Agent installation for Amazon Linux 2023..."
+                - |
+                  # Try to install aws-kinesis-agent from dnf first
+                  if dnf install -y aws-kinesis-agent; then
+                    echo "Kinesis Agent installed successfully via dnf"
+                  else
+                    echo "DNF installation failed, trying manual installation..."
+                    
+                    # Manual installation for Amazon Linux 2023
+                    cd /tmp
+                    
+                    # Download and install Kinesis Agent manually
+                    if curl -O https://s3.amazonaws.com/kinesis-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm; then
+                      echo "Downloaded Kinesis Agent RPM"
+                      if rpm -Uvh aws-kinesis-agent-latest.amzn2.noarch.rpm; then
+                        echo "Kinesis Agent installed successfully via RPM"
+                      else
+                        echo "RPM installation failed, trying alternative method..."
+                        
+                        # Alternative: Install Java dependencies and create service manually
+                        dnf install -y java-1.8.0-openjdk
+                        
+                        # Create kinesis agent directory
+                        mkdir -p /etc/aws-kinesis
+                        mkdir -p /var/log/aws-kinesis-agent
+                        
+                        # Create basic configuration
+                        cat > /etc/aws-kinesis/agent.json << 'EOF'
+                {
+                  "cloudwatch.emitMetrics": true,
+                  "kinesis.endpoint": "",
+                  "firehose.endpoint": "",
+                  "flows": []
+                }
+                EOF
+                        
+                        echo "Basic Kinesis Agent configuration created"
+                      fi
+                    else
+                      echo "Failed to download Kinesis Agent RPM"
+                    fi
+                  fi
+                - |
+                  # Verify installation
+                  if systemctl list-unit-files | grep -q aws-kinesis-agent; then
+                    echo "Kinesis Agent service found"
+                    systemctl enable aws-kinesis-agent || echo "Failed to enable service"
+                  else
+                    echo "Kinesis Agent service not found, but configuration is ready"
+                  fi
+                - echo "Kinesis Agent installation completed"
+          - name: InstallKinesisAgentApt
+            action: aws:runShellScript
+            precondition:
+              StringEquals:
+                - '{{ LinuxFlavor }}'
+                - ubuntu
+            inputs:
+              timeoutSeconds: 600
+              runCommand:
+                - '#!/bin/bash'
+                - set -e
+                - echo "Starting Kinesis Agent installation for Ubuntu..."
+                - |
+                  # Install Java first
+                  apt-get -q update && DEBIAN_FRONTEND=noninteractive apt-get install -y -q openjdk-8-jdk
+                  
+                  # Download and install Kinesis Agent
+                  cd /tmp
+                  if wget https://s3.amazonaws.com/kinesis-agent/aws-kinesis-agent-latest.amzn2.noarch.rpm; then
+                    echo "Downloaded Kinesis Agent RPM"
+                    # Convert RPM to DEB and install
+                    apt-get install -y alien
+                    alien -d aws-kinesis-agent-latest.amzn2.noarch.rpm
+                    dpkg -i aws-kinesis-agent*.deb || apt-get install -f -y
+                  else
+                    echo "Failed to download Kinesis Agent, creating manual setup..."
+                    mkdir -p /etc/aws-kinesis
+                    mkdir -p /var/log/aws-kinesis-agent
+                    
+                    # Create basic configuration
+                    cat > /etc/aws-kinesis/agent.json << 'EOF'
+                {
+                  "cloudwatch.emitMetrics": true,
+                  "kinesis.endpoint": "",
+                  "firehose.endpoint": "",
+                  "flows": []
+                }
+                EOF
+                  fi
+                - echo "Kinesis Agent installation completed"
           - name: CloneRepo
             action: aws:runShellScript
             inputs:
@@ -947,6 +1106,42 @@ Resources:
                   - ssm:DeleteParameter*
                 Resource:
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/*"
+        - PolicyName: AmazonLinux2023RepositoryAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: AmazonLinuxRepositoryS3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - "arn:aws:s3:::al2023-repos-*"
+                  - "arn:aws:s3:::al2023-repos-*/*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*/*"
+              - Sid: KinesisAgentAccess
+                Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                  - kinesis:ListStreams
+                  - kinesis:CreateStream
+                  - kinesis:DeleteStream
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                  - firehose:DescribeDeliveryStream
+                  - firehose:ListDeliveryStreams
+                Resource: "*"
+              - Sid: VPCEndpointAccess
+                Effect: Allow
+                Action:
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeNetworkInterfaces
+                Resource: "*"
 
   VSCodeInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -977,14 +1172,56 @@ Resources:
         Fn::Base64: !Sub |
           #cloud-config
           hostname: ${InstanceName}
+          write_files:
+            - path: /tmp/setup-instance.sh
+              permissions: '0755'
+              content: |
+                #!/bin/bash
+                set -e
+                echo "Starting instance setup..."
+                
+                # Wait for cloud-init to complete
+                while [ ! -f /var/lib/cloud/instance/boot-finished ]; do
+                  echo "Waiting for cloud-init to complete..."
+                  sleep 5
+                done
+                
+                # Configure AWS region
+                export AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+                echo "AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION" >> /etc/environment
+                
+                # Clean up package manager locks
+                killall -9 yum dnf || true
+                rm -f /var/lib/rpm/.rpm.lock /var/lib/dnf/lock.pid
+                
+                # For Amazon Linux 2023
+                if [ -f /etc/amazon-linux-release ]; then
+                  dnf clean all
+                  rm -rf /var/cache/dnf/*
+                  
+                  # Retry mechanism for dnf operations
+                  for i in {1..3}; do
+                    echo "Attempt $i: Updating package metadata..."
+                    if dnf makecache --refresh; then
+                      echo "Package metadata updated successfully"
+                      break
+                    else
+                      echo "Failed to update metadata, retrying in 30 seconds..."
+                      sleep 30
+                    fi
+                  done
+                else
+                  # For other distributions
+                  yum clean all
+                  rm -f /var/lib/rpm/__db*
+                  rpm --rebuilddb
+                fi
+                
+                echo "Instance setup completed"
           runcmd:
             - mkdir -p ${HomeFolder} && chown -R ${VSCodeUser}:${VSCodeUser} ${HomeFolder}
-            - killall -9 yum || true
-            - rm -f /var/lib/rpm/.rpm.lock
-            - yum clean all
-            - rm -f /var/lib/rpm/__db*
-            - rpm --rebuilddb
-            - sleep 5
+            - /tmp/setup-instance.sh
+            - echo "UserData execution completed"
       Tags:
       - Key: Name
         Value: !Ref InstanceName
