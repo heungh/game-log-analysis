@@ -1,7 +1,7 @@
-+++
-title = "Option 2: Vector Installation"
-weight = 20
-+++
+---
+title: "Option 2: Vector Installation"
+weight: 20
+---
 
 # Vector Installation Guide
 

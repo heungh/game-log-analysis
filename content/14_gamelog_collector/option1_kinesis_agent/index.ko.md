@@ -1,7 +1,7 @@
-+++
-title = "Option 1: Kinesis Agent 설치"
-weight = 10
-+++
+---
+title: "Option 1: Kinesis Agent 설치"
+weight: 10
+---
 
 # Kinesis Agent 설치 가이드
 

@@ -1,7 +1,7 @@
-+++
-title = "Option 3: Fluent Bit 설치"
-weight = 30
-+++
+---
+title: "Option 3: Fluent Bit 설치"
+weight: 30
+---
 
 # Fluent Bit 설치 가이드
 

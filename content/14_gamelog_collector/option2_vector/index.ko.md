@@ -1,7 +1,7 @@
-+++
-title = "Option 2: Vector 설치"
-weight = 20
-+++
+---
+title: "Option 2: Vector 설치"
+weight: 20
+---
 
 # Vector 설치 가이드
 

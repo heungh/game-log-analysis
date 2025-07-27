@@ -1,7 +1,7 @@
-+++
-title = "Option 1: Kinesis Agent Installation"
-weight = 10
-+++
+---
+title: "Option 1: Kinesis Agent Installation"
+weight: 10
+---
 
 # Kinesis Agent Installation Guide
 
