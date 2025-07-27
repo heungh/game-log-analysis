@@ -1,7 +1,7 @@
-+++
-title = "Option 3: Fluent Bit Installation"
-weight = 30
-+++
+---
+title: "Option 3: Fluent Bit Installation"
+weight: 30
+---
 
 # Fluent Bit Installation Guide
 
