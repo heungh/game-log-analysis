@@ -1,7 +1,7 @@
-+++
-title = "Game Log Analytics Workshop"
-weight = 0
-+++
+---
+title: "Game Log Analytics Workshop"
+weight: 0
+---
 
 # Welcome to Game Log Analytics Workshop
 
