@@ -13,6 +13,11 @@ Parameters:
     Default: 0.0.0.0/0
     Description: CIDR block allowed to access services (default allows all)
 
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: Latest Amazon Linux 2023 AMI ID
+
 Resources:
   # Auto-generated Key Pair
   WorkshopKeyPair:
@@ -442,7 +447,7 @@ Resources:
   DataPipelineInstance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: ami-0fd26c36a83ae0088  # Amazon Linux 2023 (us-east-1)
+      ImageId: !Ref LatestAmiId
       InstanceType: !Ref EC2InstanceType
       KeyName: !Ref WorkshopKeyPair
       SubnetId: !Ref PublicSubnet1
