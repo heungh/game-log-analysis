@@ -1,0 +1,327 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Simple VSCode Server on Amazon Linux 2023 with 403 error resolution'
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large]
+    Description: EC2 instance type
+
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed to access VSCode server
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: Latest Amazon Linux 2023 AMI ID
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: VSCode-VPC
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: VSCode-IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VSCode-PublicSubnet
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: VSCode-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group
+  VSCodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for VSCode server
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCIDR
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AllowedCIDR
+          Description: VSCode Server access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: VSCode-SecurityGroup
+
+  # VPC Endpoint for S3 (403 에러 해결용)
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PublicRouteTable
+
+  # Key Pair
+  VSCodeKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${AWS::StackName}-vscode-keypair'
+      KeyType: rsa
+      KeyFormat: pem
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vscode-keypair'
+
+  # IAM Role
+  VSCodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: S3RepositoryAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - "arn:aws:s3:::al2023-repos-*"
+                  - "arn:aws:s3:::al2023-repos-*/*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*"
+                  - "arn:aws:s3:::amazonlinux-2-repos-*/*"
+                  - "arn:aws:s3:::*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeRegions
+                  - ec2:DescribeVpcEndpoints
+                Resource: "*"
+
+  VSCodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref VSCodeRole
+
+  # EC2 Instance
+  VSCodeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref VSCodeKeyPair
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref VSCodeSecurityGroup
+      IamInstanceProfile: !Ref VSCodeInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          
+          # 로그 설정
+          exec > >(tee /var/log/user-data.log) 2>&1
+          echo "=== VSCode Server 설치 시작 ==="
+          
+          # 시스템 초기화
+          echo "시스템 초기화 중..."
+          
+          # AWS 리전 설정
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /etc/environment
+          
+          # 패키지 매니저 정리
+          dnf clean all
+          rm -rf /var/cache/dnf/*
+          
+          # 403 에러 해결을 위한 저장소 설정
+          echo "저장소 설정 중..."
+          
+          # 문제가 있는 저장소 비활성화
+          dnf config-manager --disable kernel-livepatch 2>/dev/null || true
+          
+          # 메타데이터 캐시 새로고침 (재시도 포함)
+          for i in {1..3}; do
+            echo "메타데이터 업데이트 시도 $i/3..."
+            if dnf makecache --refresh --disablerepo=kernel-livepatch; then
+              echo "메타데이터 업데이트 성공"
+              break
+            else
+              echo "메타데이터 업데이트 실패, 30초 후 재시도..."
+              sleep 30
+            fi
+          done
+          
+          # 시스템 업데이트
+          echo "시스템 업데이트 중..."
+          dnf update -y --skip-broken --disablerepo=kernel-livepatch || echo "시스템 업데이트 실패, 계속 진행..."
+          
+          # 기본 패키지 설치
+          echo "기본 패키지 설치 중..."
+          dnf install -y curl wget unzip tar git --skip-broken --disablerepo=kernel-livepatch || echo "일부 패키지 설치 실패, 계속 진행..."
+          
+          # Java 설치
+          echo "Java 설치 중..."
+          dnf install -y java-11-amazon-corretto-headless --skip-broken --disablerepo=kernel-livepatch || \
+          dnf install -y java-11-openjdk-headless --skip-broken --disablerepo=kernel-livepatch || \
+          echo "Java 설치 실패, 계속 진행..."
+          
+          # Node.js 설치
+          echo "Node.js 설치 중..."
+          curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - || echo "Node.js 저장소 추가 실패"
+          dnf install -y nodejs --skip-broken --disablerepo=kernel-livepatch || echo "Node.js 설치 실패, 계속 진행..."
+          
+          # VSCode Server 설치
+          echo "VSCode Server 설치 중..."
+          
+          # ec2-user로 VSCode Server 설치
+          sudo -u ec2-user bash -c 'curl -fsSL https://code-server.dev/install.sh | sh' || {
+            echo "VSCode Server 설치 실패, 재시도..."
+            curl -fsSL https://code-server.dev/install.sh | bash -s --
+          }
+          
+          # VSCode 설정
+          echo "VSCode 설정 중..."
+          
+          # 설정 디렉토리 생성
+          mkdir -p /home/ec2-user/.config/code-server
+          mkdir -p /home/ec2-user/.local/share/code-server/User/
+          mkdir -p /home/ec2-user/workspace
+          
+          # VSCode 서버 설정 파일 생성
+          cat > /home/ec2-user/.config/code-server/config.yaml << 'EOF'
+          cert: false
+          auth: password
+          password: temp123!
+          bind-addr: 0.0.0.0:8080
+          EOF
+          
+          # 권한 설정
+          chown -R ec2-user:ec2-user /home/ec2-user/.config
+          chown -R ec2-user:ec2-user /home/ec2-user/.local
+          chown -R ec2-user:ec2-user /home/ec2-user/workspace
+          
+          # systemd 서비스 시작
+          echo "VSCode 서비스 시작 중..."
+          systemctl enable --now code-server@ec2-user
+          
+          # 서비스 상태 확인
+          sleep 10
+          if systemctl is-active --quiet code-server@ec2-user; then
+            echo "✅ VSCode Server 정상 실행 중"
+          else
+            echo "❌ VSCode Server 실행 실패, 수동 시작 시도..."
+            sudo -u ec2-user nohup code-server --bind-addr 0.0.0.0:8080 --auth password > /var/log/code-server.log 2>&1 &
+          fi
+          
+          # 비밀번호 변경 스크립트 생성
+          cat > /home/ec2-user/change-password.sh << 'EOF'
+          #!/bin/bash
+          echo "현재 비밀번호: temp123!"
+          read -s -p "새 비밀번호 입력: " NEW_PASSWORD
+          echo ""
+          sed -i "s/password: .*/password: $NEW_PASSWORD/" /home/ec2-user/.config/code-server/config.yaml
+          sudo systemctl restart code-server@ec2-user
+          echo "비밀번호가 변경되었습니다."
+          EOF
+          
+          chmod +x /home/ec2-user/change-password.sh
+          chown ec2-user:ec2-user /home/ec2-user/change-password.sh
+          
+          echo "=== VSCode Server 설치 완료 ==="
+          echo "접속 URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
+          echo "비밀번호: temp123!"
+      Tags:
+        - Key: Name
+          Value: VSCode-Server
+
+Outputs:
+  VSCodeURL:
+    Description: VSCode Server URL
+    Value: !Sub "http://${VSCodeInstance.PublicIp}:8080"
+    Export:
+      Name: !Sub "${AWS::StackName}-VSCodeURL"
+
+  VSCodePassword:
+    Description: Initial VSCode password
+    Value: "temp123!"
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub "ssh -i ${VSCodeKeyPair}.pem ec2-user@${VSCodeInstance.PublicIp}"
+
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref VSCodeInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceId"
