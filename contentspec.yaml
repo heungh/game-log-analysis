@@ -15,12 +15,12 @@ infrastructure:
     - templateLocation: static/cfn/integrated-data-pipeline-stack-us-east-1.yaml
       label: Data Pipeline Environment
       participantVisibleStackOutputs:
-        - VSCodeURL
-        - InitialPassword
+        - ApplicationURL
         - S3BucketName
-        - AuroraClusterEndpoint
+        - CloudWatchLogGroup
+        - InstancePublicIP
       parameters:
-        - templateParameter: EC2InstanceType
+        - templateParameter: InstanceType
           defaultValue: t3.medium
 
 awsAccountConfig:
