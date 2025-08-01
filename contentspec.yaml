@@ -72,6 +72,7 @@ awsAccountConfig:
       # [OPTIONAL] Set of regions that should be accessible by an event's provisioned account as a recommendation.
       recommended:
         - ap-northeast-2
+        - ap-northeast-1
     
       # [OPTIONAL] Set of regions that event operators' could allow access to by event's Participants.
       optional:
