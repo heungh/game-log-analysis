@@ -27,6 +27,71 @@ awsAccountConfig:
   accountSources:
     - workshop_studio
     - customer_provided
+  
+  # IAM permissions required for CloudFormation template deployment
+  iamPolicyStatements:
+    - Effect: Allow
+      Action:
+        # IAM permissions for creating roles and policies
+        - iam:CreateRole
+        - iam:DeleteRole
+        - iam:GetRole
+        - iam:PassRole
+        - iam:AttachRolePolicy
+        - iam:DetachRolePolicy
+        - iam:PutRolePolicy
+        - iam:DeleteRolePolicy
+        - iam:GetRolePolicy
+        - iam:ListRolePolicies
+        - iam:ListAttachedRolePolicies
+        - iam:CreateInstanceProfile
+        - iam:DeleteInstanceProfile
+        - iam:GetInstanceProfile
+        - iam:AddRoleToInstanceProfile
+        - iam:RemoveRoleFromInstanceProfile
+        # Lambda permissions
+        - lambda:CreateFunction
+        - lambda:DeleteFunction
+        - lambda:GetFunction
+        - lambda:UpdateFunctionCode
+        - lambda:UpdateFunctionConfiguration
+        - lambda:InvokeFunction
+        - lambda:ListFunctions
+        - lambda:GetFunctionConfiguration
+        # CloudFormation permissions
+        - cloudformation:CreateStack
+        - cloudformation:UpdateStack
+        - cloudformation:DeleteStack
+        - cloudformation:DescribeStacks
+        - cloudformation:DescribeStackEvents
+        - cloudformation:DescribeStackResources
+        - cloudformation:GetTemplate
+        # Tagging permissions
+        - tag:GetResources
+        - tag:TagResources
+        - tag:UntagResources
+        - tag:GetTagKeys
+        - tag:GetTagValues
+        # EC2 tagging permissions
+        - ec2:CreateTags
+        - ec2:DeleteTags
+        - ec2:DescribeTags
+        # RDS tagging permissions
+        - rds:AddTagsToResource
+        - rds:RemoveTagsFromResource
+        - rds:ListTagsForResource
+        # S3 tagging permissions
+        - s3:GetBucketTagging
+        - s3:PutBucketTagging
+        - s3:DeleteBucketTagging
+        # Secrets Manager tagging permissions
+        - secretsmanager:TagResource
+        - secretsmanager:UntagResource
+        # Lambda tagging permissions
+        - lambda:TagResource
+        - lambda:UntagResource
+        - lambda:ListTags
+      Resource: "*"
 
   # List of valid IAM service linked roles (SLRs) that need to be provisioned for accounts provisioned for this event.
   # SLRs will be automatically created by Workshop Studio when provisioning accounts.

@@ -23,12 +23,12 @@ Resources:
   WorkshopKeyPair:
     Type: AWS::EC2::KeyPair
     Properties:
-      KeyName: !Sub '${AWS::StackName}-workshop-keypair'
+      KeyName: !Join ['-', [!Ref 'AWS::StackName', 'workshop-keypair']]
       KeyType: rsa
       KeyFormat: pem
       Tags:
         - Key: Name
-          Value: !Sub '${AWS::StackName}-workshop-keypair'
+          Value: !Join ['-', [!Ref 'AWS::StackName', 'workshop-keypair']]
 
   # VPC and Networking
   VPC:
@@ -372,16 +372,20 @@ Resources:
   AuroraSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'gamedb1cluster-${AWS::StackName}'
+      Name: !Join ['-', ['gamedb1cluster', !Ref 'AWS::StackName']]
       Description: Secrets for Aurora MySQL Cluster
-      SecretString: !Sub '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-${AWS::Region}.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
+      SecretString: !Join
+        - ''
+        - - '{"username":"dbadmin","password":"12345678","engine":"mysql","host":"gamedb1cluster.cluster-'
+          - !Ref 'AWS::Region'
+          - '.rds.amazonaws.com","port":3306,"dbClusterIdentifier":"gamedb1cluster","dbname":"game"}'
 
   AuroraDBCluster:
     Type: AWS::RDS::DBCluster
     Properties:
       Engine: aurora-mysql
       DatabaseName: game
-      DBClusterIdentifier: !Sub 'gamedb1cluster-${AWS::StackName}'
+      DBClusterIdentifier: !Join ['-', ['gamedb1cluster', !Ref 'AWS::StackName']]
       MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:username}}' ]]
       MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:password}}' ]]
       DBSubnetGroupName: !Ref AuroraDBSubnetGroup
@@ -464,7 +468,7 @@ Resources:
         - Key: Name
           Value: DataPipelineInstance
       UserData:
-        Fn::Base64: !Sub |
+        Fn::Base64: |
           #!/bin/bash
           
           # 모든 출력을 로그 파일에도 저장
@@ -730,79 +734,84 @@ Outputs:
     Description: Instance ID of the Data Pipeline server
     Value: !Ref DataPipelineInstance
     Export:
-      Name: !Sub "${AWS::StackName}-InstanceId"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'InstanceId']]
 
   PublicIP:
     Description: Public IP address of the Data Pipeline server
     Value: !GetAtt DataPipelineInstance.PublicIp
     Export:
-      Name: !Sub "${AWS::StackName}-PublicIP"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'PublicIP']]
 
   VSCodeURL:
     Description: VSCode Server URL
     Value: !Sub "http://${DataPipelineInstance.PublicIp}:8080"
     Export:
-      Name: !Sub "${AWS::StackName}-VSCodeURL"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'VSCodeURL']]
 
   SSHCommand:
     Description: SSH command to connect to the instance
-    Value: !Sub "ssh -i ${AWS::StackName}-workshop-keypair.pem ec2-user@${DataPipelineInstance.PublicIp}"
+    Value: !Join
+      - ''
+      - - 'ssh -i '
+        - !Ref AWS::StackName
+        - '-workshop-keypair.pem ec2-user@'
+        - !GetAtt DataPipelineInstance.PublicIp
     Export:
-      Name: !Sub "${AWS::StackName}-SSHCommand"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'SSHCommand']]
 
   KeyPairName:
     Description: Name of the auto-generated key pair
     Value: !Ref WorkshopKeyPair
     Export:
-      Name: !Sub "${AWS::StackName}-KeyPairName"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'KeyPairName']]
 
   VSCodeInitialPassword:
     Description: Initial VSCode password (change immediately)
     Value: "temp123!"
     Export:
-      Name: !Sub "${AWS::StackName}-VSCodeInitialPassword"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'VSCodeInitialPassword']]
 
   S3BucketName:
     Description: S3 Bucket Name
     Value: !Ref S3Bucket
     Export:
-      Name: !Sub "${AWS::StackName}-S3BucketName"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'S3BucketName']]
 
   AuroraClusterEndpoint:
     Description: Aurora Cluster Endpoint
     Value: !GetAtt AuroraDBCluster.Endpoint.Address
     Export:
-      Name: !Sub "${AWS::StackName}-AuroraEndpoint"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'AuroraEndpoint']]
 
   AuroraSecretARN:
     Description: ARN of Aurora Secret
     Value: !Ref AuroraSecret
     Export:
-      Name: !Sub "${AWS::StackName}-AuroraSecretARN"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'AuroraSecretARN']]
 
   VpcId:
     Description: VPC ID
     Value: !Ref VPC
     Export:
-      Name: !Sub "${AWS::StackName}-VpcId"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'VpcId']]
 
   PublicSubnet1:
     Description: Public Subnet 1 ID
     Value: !Ref PublicSubnet1
     Export:
-      Name: !Sub "${AWS::StackName}-PublicSubnet1"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'PublicSubnet1']]
 
   PublicSubnet2:
     Description: Public Subnet 2 ID
     Value: !Ref PublicSubnet2
     Export:
-      Name: !Sub "${AWS::StackName}-PublicSubnet2"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'PublicSubnet2']]
 
   PrivateSubnet1:
     Description: Private Subnet 1 ID
     Value: !Ref PrivateSubnet1
     Export:
-      Name: !Sub "${AWS::StackName}-PrivateSubnet1"
+      Name: !Join ['-', [!Ref 'AWS::StackName', 'PrivateSubnet1']]
 
   PrivateSubnet2:
     Description: Private Subnet 2 ID
