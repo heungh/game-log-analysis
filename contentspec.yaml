@@ -12,7 +12,7 @@ params:
 
 infrastructure:
   cloudformationTemplates:
-    - templateLocation: static/cfn/integrated-data-pipeline-stack-us-east-1.yaml
+    - templateLocation: static/cfn/integrated-data-pipeline-stack.yaml
       label: Data Pipeline Environment
       participantVisibleStackOutputs:
         - ApplicationURL
@@ -22,6 +22,14 @@ infrastructure:
       parameters:
         - templateParameter: InstanceType
           defaultValue: t3.medium
+        - templateParameter: KeyPairName
+          userOverridable: true
+        - templateParameter: VpcId
+          userOverridable: true
+        - templateParameter: SubnetId
+          userOverridable: true
+        - templateParameter: AllowedCidr
+          defaultValue: 0.0.0.0/0
 
 awsAccountConfig:
   accountSources:
@@ -31,8 +39,7 @@ awsAccountConfig:
   # List of valid IAM service linked roles (SLRs) that need to be provisioned for accounts provisioned for this event.
   # SLRs will be automatically created by Workshop Studio when provisioning accounts.
   # NOTE: SLRs may not all be deleted during account recycling, so it's possible that accounts in your event contain additional SLRs.
-  serviceLinkedRoles:
-    - appsync.amazonaws.com  
+  # serviceLinkedRoles:  
 
   participantRole:
     iamPolicies: 
@@ -60,14 +67,15 @@ awsAccountConfig:
 
       # [OPTIONAL] Set of regions an event's provisioned account must have access to. 
       required:
-        - us-east-1
+        - ap-northeast-2
 
       # [OPTIONAL] Set of regions that should be accessible by an event's provisioned account as a recommendation.
       recommended:
-        - us-east-1
+        - ap-northeast-2
     
       # [OPTIONAL] Set of regions that event operators' could allow access to by event's Participants.
       optional:
+        - us-east-1
         - us-east-2
         - us-west-2
     
@@ -80,5 +88,4 @@ awsAccountConfig:
       # Note: Only 1 deployment region is supported currently. Meaning no more than 1 region can be required.
       # Use this sparingly and only when strictly required for the Workshop content, as this will prevent the content from being run in any other region.
       recommended:
-        - us-east-1
         - ap-northeast-2

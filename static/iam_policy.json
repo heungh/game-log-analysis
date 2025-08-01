@@ -10,10 +10,167 @@
                 "StringLike": {
                     "iam:PassedToService": [
                         "glue.amazonaws.com",
-                        "quicksight.amazonaws.com"
+                        "quicksight.amazonaws.com",
+                        "kinesis.amazonaws.com",
+                        "firehose.amazonaws.com",
+                        "lambda.amazonaws.com",
+                        "rds.amazonaws.com",
+                        "athena.amazonaws.com"
                     ]
                 }
             }
+        },
+        {
+            "Sid": "S3FullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "s3:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "LambdaFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "lambda:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "GlueFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "glue:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AthenaFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "athena:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "QuickSightFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "quicksight:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "RDSFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "rds:*",
+                "rds-db:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "BedrockFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "bedrock:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "KinesisDataFirehoseFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "firehose:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "KinesisFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "kinesis:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "CloudWatchFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "cloudwatch:*",
+                "logs:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EC2NetworkAccess",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeVpcs",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:CreateNetworkInterface",
+                "ec2:DeleteNetworkInterface",
+                "ec2:AttachNetworkInterface",
+                "ec2:DetachNetworkInterface"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "IAMReadAccess",
+            "Effect": "Allow",
+            "Action": [
+                "iam:GetRole",
+                "iam:GetRolePolicy",
+                "iam:ListRoles",
+                "iam:ListRolePolicies",
+                "iam:ListAttachedRolePolicies"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SecretsManagerAccess",
+            "Effect": "Allow",
+            "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SSMParameterAccess",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:GetParameter",
+                "ssm:GetParameters",
+                "ssm:GetParametersByPath"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EventBridgeAccess",
+            "Effect": "Allow",
+            "Action": [
+                "events:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SNSAccess",
+            "Effect": "Allow",
+            "Action": [
+                "sns:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SQSAccess",
+            "Effect": "Allow",
+            "Action": [
+                "sqs:*"
+            ],
+            "Resource": "*"
         }
     ]
 }
