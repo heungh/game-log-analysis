@@ -10,9 +10,10 @@ Amazon Kinesis Agent is a standalone Java application that monitors log files an
 ## Prerequisites
 
 - Ubuntu 20.04 LTS EC2 instance
-- Java 8 or later installed
+- Java 11 or later installed
 - Appropriate IAM permissions for Kinesis services
 - Internet connectivity for downloading packages
+- Git and Maven for building from source
 
 ## System Information Check
 
@@ -29,46 +30,47 @@ uname -a
 df -h
 ```
 
-## Installation Methods
+## Installation Method: Build from GitHub Source
 
-### Method 1: Direct DEB Package Installation (Recommended)
+Since pre-built packages are not reliably available, building from source is the recommended approach.
 
 ```bash
-# Update system packages
-sudo apt update && sudo apt upgrade -y
-
 # Install required dependencies
-sudo apt install -y wget curl openjdk-8-jdk
+sudo apt update
+sudo apt install -y git maven openjdk-11-jdk
 
-# Set JAVA_HOME environment
-echo 'export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64' >> ~/.bashrc
-source ~/.bashrc
-
-# Download Kinesis Agent DEB package
-cd /tmp
-wget https://s3.amazonaws.com/kinesis-agent-install-packages/aws-kinesis-agent-latest.deb
-
-# Install the package
-sudo dpkg -i aws-kinesis-agent-latest.deb
-
-# Fix any dependency issues
-sudo apt-get install -f -y
-```
-
-### Method 2: Manual Installation (If Method 1 fails)
-
-```bash
-# Install Java 8
-sudo apt install -y openjdk-8-jdk
+# Verify Java and Maven installation
+java -version
+mvn -version
 
 # Create necessary directories
 sudo mkdir -p /usr/share/aws-kinesis-agent
 sudo mkdir -p /etc/aws-kinesis
 sudo mkdir -p /var/log/aws-kinesis-agent
 
-# Download Kinesis Agent JAR file
-cd /usr/share/aws-kinesis-agent
-sudo wget https://github.com/awslabs/amazon-kinesis-agent/releases/download/2.0.8/aws-kinesis-agent-2.0.8.jar
+# Clone the source code from GitHub
+git clone https://github.com/awslabs/amazon-kinesis-agent.git
+cd amazon-kinesis-agent
+
+# Check available versions (optional)
+git tag --sort=-version:refname | head -5
+
+# Build the project (skip tests for faster build)
+mvn clean package -DskipTests
+
+# Verify build results
+ls -la target/
+
+# Copy dependencies to lib directory
+mvn dependency:copy-dependencies -DoutputDirectory=/tmp/kinesis-deps
+sudo mkdir -p /usr/share/aws-kinesis-agent/lib
+sudo cp /tmp/kinesis-deps/*.jar /usr/share/aws-kinesis-agent/lib/
+
+# Copy main JAR file to system location (note: filename is amazon-kinesis-agent)
+sudo cp target/amazon-kinesis-agent-*.jar /usr/share/aws-kinesis-agent/
+
+# Verify the exact JAR filename
+ls -la /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar
 
 # Create basic configuration file
 sudo tee /etc/aws-kinesis/agent.json << 'EOF'
@@ -80,13 +82,19 @@ sudo tee /etc/aws-kinesis/agent.json << 'EOF'
 }
 EOF
 
-# Create execution script
-sudo tee /usr/bin/aws-kinesis-agent << 'EOF'
+# Create execution script with exact JAR filename (replace 2.0.13 with your version)
+# First, get the exact version number
+VERSION=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar | sed 's/.*amazon-kinesis-agent-\(.*\)\.jar/\1/')
+echo "Detected version: $VERSION"
+
+# Create execution script with exact filename
+sudo tee /usr/bin/aws-kinesis-agent << EOF
 #!/bin/bash
-JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-export JAVA_HOME
-cd /usr/share/aws-kinesis-agent
-$JAVA_HOME/bin/java -cp aws-kinesis-agent-2.0.8.jar com.amazon.kinesis.streaming.agent.Agent
+CLASSPATH="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-${VERSION}.jar:/usr/share/aws-kinesis-agent/lib/*"
+java -cp "\$CLASSPATH" \\
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \\
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \\
+     com.amazon.kinesis.streaming.agent.Agent "\$@"
 EOF
 
 sudo chmod +x /usr/bin/aws-kinesis-agent
@@ -112,6 +120,89 @@ EOF
 
 # Reload systemd daemon
 sudo systemctl daemon-reload
+
+# Installation verification
+ls -la /usr/share/aws-kinesis-agent/
+echo "Number of dependency JARs:"
+ls /usr/share/aws-kinesis-agent/lib/ | wc -l
+aws-kinesis-agent --help
+```
+
+**Important Notes:**
+- The JAR filename is `amazon-kinesis-agent-*.jar`, not `aws-kinesis-agent-*.jar`
+- Using wildcards (`*`) in the execution script may cause classpath issues
+- Always use the exact JAR filename in the execution script
+- Ensure all dependency JARs are copied to the lib directory
+
+## Troubleshooting Classpath Issues
+
+If you encounter `ClassNotFoundException` errors:
+
+### 1. Check the execution script
+
+```bash
+# Verify the script uses exact JAR filename
+cat /usr/bin/aws-kinesis-agent
+
+# The CLASSPATH should use exact filename, not wildcards:
+# CORRECT: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar
+# INCORRECT: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar
+```
+
+### 2. Fix classpath with exact filename
+
+```bash
+# Get the exact JAR filename
+JAR_FILE=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar)
+echo "JAR file: $JAR_FILE"
+
+# Extract just the filename
+JAR_NAME=$(basename "$JAR_FILE")
+echo "JAR name: $JAR_NAME"
+
+# Recreate the script with exact filename
+sudo tee /usr/bin/aws-kinesis-agent << EOF
+#!/bin/bash
+CLASSPATH="/usr/share/aws-kinesis-agent/${JAR_NAME}:/usr/share/aws-kinesis-agent/lib/*"
+java -cp "\$CLASSPATH" \\
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \\
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \\
+     com.amazon.kinesis.streaming.agent.Agent "\$@"
+EOF
+
+sudo chmod +x /usr/bin/aws-kinesis-agent
+```
+
+### 3. Test directly with Java
+
+```bash
+# Test with direct Java command
+java -cp "/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*" com.amazon.kinesis.streaming.agent.Agent --help
+```
+
+### 4. Alternative: Explicit JAR listing
+
+If wildcards don't work in your environment:
+
+```bash
+sudo tee /usr/bin/aws-kinesis-agent << 'EOF'
+#!/bin/bash
+MAIN_JAR="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar"
+LIB_DIR="/usr/share/aws-kinesis-agent/lib"
+CLASSPATH="$MAIN_JAR"
+
+# Add all JAR files from lib directory to classpath
+for jar in $LIB_DIR/*.jar; do
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+java -cp "$CLASSPATH" \
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \
+     com.amazon.kinesis.streaming.agent.Agent "$@"
+EOF
+
+sudo chmod +x /usr/bin/aws-kinesis-agent
 ```
 
 ## Service Configuration and Startup
@@ -213,6 +304,9 @@ ps aux | grep kinesis
 
 # View recent logs
 sudo journalctl -u aws-kinesis-agent --no-pager -n 20
+
+# Test help command
+aws-kinesis-agent --help
 ```
 
 ### Monitor Performance
@@ -251,6 +345,19 @@ sudo ss -tulpn | grep java
    ```bash
    # Validate JSON configuration
    python3 -m json.tool /etc/aws-kinesis/agent.json
+   ```
+
+5. **Classpath issues (most common)**
+   ```bash
+   # Check JAR files
+   ls -la /usr/share/aws-kinesis-agent/
+   ls -la /usr/share/aws-kinesis-agent/lib/ | wc -l
+   
+   # Verify execution script uses exact JAR filename
+   cat /usr/bin/aws-kinesis-agent
+   
+   # Test direct Java execution
+   java -cp "/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*" com.amazon.kinesis.streaming.agent.Agent --help
    ```
 
 ### Log File Locations

@@ -10,9 +10,10 @@ Amazon Kinesis Agent는 로그 파일을 모니터링하고 Amazon Kinesis Data 
 ## 사전 요구사항
 
 - Ubuntu 20.04 LTS EC2 인스턴스
-- Java 8 이상 설치
+- Java 11 이상 설치
 - Kinesis 서비스에 대한 적절한 IAM 권한
 - 패키지 다운로드를 위한 인터넷 연결
+- 소스 빌드를 위한 Git 및 Maven
 
 ## 시스템 정보 확인
 
@@ -29,46 +30,47 @@ uname -a
 df -h
 ```
 
-## 설치 방법
+## 설치 방법: GitHub 소스에서 빌드
 
-### 방법 1: 직접 DEB 패키지 설치 (권장)
-
-```bash
-# 시스템 패키지 업데이트
-sudo apt update && sudo apt upgrade -y
-
-# 필수 의존성 설치
-sudo apt install -y wget curl openjdk-8-jdk
-
-# JAVA_HOME 환경변수 설정
-echo 'export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64' >> ~/.bashrc
-source ~/.bashrc
-
-# Kinesis Agent DEB 패키지 다운로드
-cd /tmp
-wget https://s3.amazonaws.com/kinesis-agent-install-packages/aws-kinesis-agent-latest.deb
-
-# 패키지 설치
-sudo dpkg -i aws-kinesis-agent-latest.deb
-
-# 의존성 문제 해결
-sudo apt-get install -f -y
-```
-
-### 방법 2: 수동 설치 (방법 1이 실패할 경우)
+미리 빌드된 패키지를 안정적으로 사용할 수 없으므로, 소스에서 빌드하는 것이 권장되는 방법입니다.
 
 ```bash
-# Java 8 설치
-sudo apt install -y openjdk-8-jdk
+# 필요한 도구 설치
+sudo apt update
+sudo apt install -y git maven openjdk-11-jdk
+
+# Java 및 Maven 버전 확인
+java -version
+mvn -version
 
 # 필요한 디렉토리 생성
 sudo mkdir -p /usr/share/aws-kinesis-agent
 sudo mkdir -p /etc/aws-kinesis
 sudo mkdir -p /var/log/aws-kinesis-agent
 
-# Kinesis Agent JAR 파일 다운로드
-cd /usr/share/aws-kinesis-agent
-sudo wget https://github.com/awslabs/amazon-kinesis-agent/releases/download/2.0.8/aws-kinesis-agent-2.0.8.jar
+# GitHub에서 소스 코드 클론
+git clone https://github.com/awslabs/amazon-kinesis-agent.git
+cd amazon-kinesis-agent
+
+# 최신 태그 확인 (선택사항)
+git tag --sort=-version:refname | head -5
+
+# 빌드 (테스트 스킵으로 빠르게)
+mvn clean package -DskipTests
+
+# 빌드 결과 확인
+ls -la target/
+
+# 의존성을 lib 디렉토리로 복사
+mvn dependency:copy-dependencies -DoutputDirectory=/tmp/kinesis-deps
+sudo mkdir -p /usr/share/aws-kinesis-agent/lib
+sudo cp /tmp/kinesis-deps/*.jar /usr/share/aws-kinesis-agent/lib/
+
+# 메인 JAR 파일을 시스템 위치로 복사 (파일명이 amazon-kinesis-agent임에 주의)
+sudo cp target/amazon-kinesis-agent-*.jar /usr/share/aws-kinesis-agent/
+
+# 정확한 JAR 파일명 확인
+ls -la /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar
 
 # 기본 설정 파일 생성
 sudo tee /etc/aws-kinesis/agent.json << 'EOF'
@@ -80,13 +82,19 @@ sudo tee /etc/aws-kinesis/agent.json << 'EOF'
 }
 EOF
 
-# 실행 스크립트 생성
-sudo tee /usr/bin/aws-kinesis-agent << 'EOF'
+# 정확한 JAR 파일명으로 실행 스크립트 생성 (2.0.13을 실제 버전으로 교체)
+# 먼저 정확한 버전 번호 확인
+VERSION=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar | sed 's/.*amazon-kinesis-agent-\(.*\)\.jar/\1/')
+echo "감지된 버전: $VERSION"
+
+# 정확한 파일명으로 실행 스크립트 생성
+sudo tee /usr/bin/aws-kinesis-agent << EOF
 #!/bin/bash
-JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-export JAVA_HOME
-cd /usr/share/aws-kinesis-agent
-$JAVA_HOME/bin/java -cp aws-kinesis-agent-2.0.8.jar com.amazon.kinesis.streaming.agent.Agent
+CLASSPATH="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-${VERSION}.jar:/usr/share/aws-kinesis-agent/lib/*"
+java -cp "\$CLASSPATH" \\
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \\
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \\
+     com.amazon.kinesis.streaming.agent.Agent "\$@"
 EOF
 
 sudo chmod +x /usr/bin/aws-kinesis-agent
@@ -112,6 +120,89 @@ EOF
 
 # systemd 데몬 리로드
 sudo systemctl daemon-reload
+
+# 설치 확인
+ls -la /usr/share/aws-kinesis-agent/
+echo "의존성 JAR 파일 개수:"
+ls /usr/share/aws-kinesis-agent/lib/ | wc -l
+aws-kinesis-agent --help
+```
+
+**중요 사항:**
+- JAR 파일명은 `amazon-kinesis-agent-*.jar`이며, `aws-kinesis-agent-*.jar`가 아닙니다
+- 실행 스크립트에서 와일드카드(`*`) 사용 시 클래스패스 문제가 발생할 수 있습니다
+- 실행 스크립트에서는 항상 정확한 JAR 파일명을 사용해야 합니다
+- 모든 의존성 JAR 파일이 lib 디렉토리에 복사되었는지 확인해야 합니다
+
+## 클래스패스 문제 해결
+
+`ClassNotFoundException` 오류가 발생하는 경우:
+
+### 1. 실행 스크립트 확인
+
+```bash
+# 스크립트가 정확한 JAR 파일명을 사용하는지 확인
+cat /usr/bin/aws-kinesis-agent
+
+# CLASSPATH는 정확한 파일명을 사용해야 합니다:
+# 올바름: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar
+# 잘못됨: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar
+```
+
+### 2. 정확한 파일명으로 클래스패스 수정
+
+```bash
+# 정확한 JAR 파일명 확인
+JAR_FILE=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar)
+echo "JAR 파일: $JAR_FILE"
+
+# 파일명만 추출
+JAR_NAME=$(basename "$JAR_FILE")
+echo "JAR 이름: $JAR_NAME"
+
+# 정확한 파일명으로 스크립트 재생성
+sudo tee /usr/bin/aws-kinesis-agent << EOF
+#!/bin/bash
+CLASSPATH="/usr/share/aws-kinesis-agent/${JAR_NAME}:/usr/share/aws-kinesis-agent/lib/*"
+java -cp "\$CLASSPATH" \\
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \\
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \\
+     com.amazon.kinesis.streaming.agent.Agent "\$@"
+EOF
+
+sudo chmod +x /usr/bin/aws-kinesis-agent
+```
+
+### 3. Java로 직접 테스트
+
+```bash
+# Java 명령으로 직접 테스트
+java -cp "/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*" com.amazon.kinesis.streaming.agent.Agent --help
+```
+
+### 4. 대안: 명시적 JAR 나열
+
+환경에서 와일드카드가 작동하지 않는 경우:
+
+```bash
+sudo tee /usr/bin/aws-kinesis-agent << 'EOF'
+#!/bin/bash
+MAIN_JAR="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar"
+LIB_DIR="/usr/share/aws-kinesis-agent/lib"
+CLASSPATH="$MAIN_JAR"
+
+# lib 디렉토리의 모든 JAR 파일을 클래스패스에 추가
+for jar in $LIB_DIR/*.jar; do
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+java -cp "$CLASSPATH" \
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \
+     com.amazon.kinesis.streaming.agent.Agent "$@"
+EOF
+
+sudo chmod +x /usr/bin/aws-kinesis-agent
 ```
 
 ## 서비스 설정 및 시작
@@ -213,6 +304,9 @@ ps aux | grep kinesis
 
 # 최근 로그 확인
 sudo journalctl -u aws-kinesis-agent --no-pager -n 20
+
+# 도움말 명령 테스트
+aws-kinesis-agent --help
 ```
 
 ### 성능 모니터링
@@ -251,6 +345,19 @@ sudo ss -tulpn | grep java
    ```bash
    # JSON 설정 검증
    python3 -m json.tool /etc/aws-kinesis/agent.json
+   ```
+
+5. **클래스패스 문제 (가장 일반적)**
+   ```bash
+   # JAR 파일 확인
+   ls -la /usr/share/aws-kinesis-agent/
+   ls -la /usr/share/aws-kinesis-agent/lib/ | wc -l
+   
+   # 실행 스크립트가 정확한 JAR 파일명을 사용하는지 확인
+   cat /usr/bin/aws-kinesis-agent
+   
+   # Java 직접 실행 테스트
+   java -cp "/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*" com.amazon.kinesis.streaming.agent.Agent --help
    ```
 
 ### 로그 파일 위치
@@ -335,10 +442,11 @@ sudo nano /usr/bin/aws-kinesis-agent
 
 ```bash
 #!/bin/bash
-JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-export JAVA_HOME
-cd /usr/share/aws-kinesis-agent
-$JAVA_HOME/bin/java -Xmx512m -Xms256m -cp aws-kinesis-agent-2.0.8.jar com.amazon.kinesis.streaming.agent.Agent
+CLASSPATH="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*"
+java -Xmx512m -Xms256m -cp "$CLASSPATH" \
+     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \
+     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \
+     com.amazon.kinesis.streaming.agent.Agent "$@"
 ```
 
 ### 모니터링 설정
