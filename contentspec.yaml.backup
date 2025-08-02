@@ -1,0 +1,92 @@
+version: 2.0
+
+defaultLocaleCode: ko-KR
+localeCodes:
+  - ko-KR
+  - en-US
+
+params:
+  hello: world
+  foo:
+    - bar
+
+infrastructure:
+  cloudformationTemplates:
+    - templateLocation: static/cfn/integrated-data-pipeline-stack.yaml
+      label: Data Pipeline Environment
+      participantVisibleStackOutputs:
+        - ApplicationURL
+        - S3BucketName
+        - CloudWatchLogGroup
+        - InstancePublicIP
+      parameters:
+        - templateParameter: InstanceType
+          defaultValue: t3.medium
+        - templateParameter: KeyPairName
+          userOverridable: true
+        - templateParameter: VpcId
+          userOverridable: true
+        - templateParameter: SubnetId
+          userOverridable: true
+        - templateParameter: AllowedCidr
+          defaultValue: 0.0.0.0/0
+
+awsAccountConfig:
+  accountSources:
+    - workshop_studio
+    - customer_provided
+
+  # List of valid IAM service linked roles (SLRs) that need to be provisioned for accounts provisioned for this event.
+  # SLRs will be automatically created by Workshop Studio when provisioning accounts.
+  # NOTE: SLRs may not all be deleted during account recycling, so it's possible that accounts in your event contain additional SLRs.
+  # serviceLinkedRoles:  
+
+  participantRole:
+    iamPolicies: 
+      - static/iam_policy.json
+
+    managedPolicies: 
+      - "arn:aws:iam::aws:policy/PowerUserAccess"
+    
+    trustedPrincipals:
+      service: 
+        - ec2.amazonaws.com
+        - lambda.amazonaws.com
+
+  # Defines a set of accessible and deployable regions for events leveraging this content.
+  regionConfiguration:
+    minAccessibleRegions: 1
+    maxAccessibleRegions: 3
+    
+    # [OPTIONAL] Regions defined under `accessibleRegions` are regions that can be made accessible to Participants.
+    # Note: 
+    #  - No resources will be deployed to these regions by Workshop Studio.
+    #  - If deployableRegions are defined, the deployment region is accessible by participants without additional configuration.
+    accessibleRegions: 
+      # Note: Although all keys below are optional, you must define at least one of the three keys if accessibleRegions is defined.
+
+      # [OPTIONAL] Set of regions an event's provisioned account must have access to. 
+      required:
+        - ap-northeast-2
+
+      # [OPTIONAL] Set of regions that should be accessible by an event's provisioned account as a recommendation.
+      recommended:
+        - ap-northeast-2
+        - ap-northeast-1
+    
+      # [OPTIONAL] Set of regions that event operators' could allow access to by event's Participants.
+      optional:
+        - us-east-1
+        - us-east-2
+        - us-west-2
+    
+    # Set of regions where the configured CloudFormation templates will be deployed to.
+    # Note: Only 1 deployment region is supported currently.
+    deployableRegions:
+      # Note: Although all keys below are optional, you must define at least one of the three keys if deployableRegions is defined.
+
+      # [OPTIONAL] Set of regions an event's cloudformation templates should be deployed to.
+      # Note: Only 1 deployment region is supported currently. Meaning no more than 1 region can be required.
+      # Use this sparingly and only when strictly required for the Workshop content, as this will prevent the content from being run in any other region.
+      recommended:
+        - ap-northeast-2

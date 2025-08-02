@@ -2,47 +2,16 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'CloudFormation template for EC2, S3, Aurora MySQL cluster, S3 VPC Endpoint, and Secrets Manager with automatic VPC creation'
 
 Parameters:
-  InstanceType:
+  EC2InstanceType:
     Type: String
-    Default: t3.medium
+    Default: t3.micro
     AllowedValues: [t3.micro, t3.small, t3.medium, m5.large, m5.xlarge]
     Description: EC2 instance type
-  
-  KeyPairName:
-    Type: String
-    Default: ""
-    Description: EC2 Key Pair for SSH access (optional)
-  
-  VpcId:
-    Type: String
-    Default: ""
-    Description: Existing VPC ID (optional - will create new VPC if not provided)
-  
-  SubnetId:
-    Type: String
-    Default: ""
-    Description: Existing Subnet ID (optional - will create new subnet if not provided)
-  
-  AllowedCidr:
-    Type: String
-    Default: "0.0.0.0/0"
-    Description: CIDR block allowed for security group access
-  
-  DBSubnetGroupName:
-    Type: String
-    Default: ""
-    Description: Existing DB Subnet Group Name (optional - will create new if not provided)
-
-Conditions:
-  CreateNewVPC: !Equals [!Ref VpcId, ""]
-  CreateNewSubnet: !Equals [!Ref SubnetId, ""]
-  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
 Resources:
   # VPC and Networking
   VPC:
     Type: AWS::EC2::VPC
-    Condition: CreateNewVPC
     Properties:
       CidrBlock: 10.0.0.0/16
       EnableDnsHostnames: true
@@ -53,18 +22,15 @@ Resources:
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-    Condition: CreateNewVPC
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       AvailabilityZone: !Select [ 0, !GetAZs '' ]
@@ -73,7 +39,6 @@ Resources:
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       AvailabilityZone: !Select [ 1, !GetAZs '' ]
@@ -82,7 +47,6 @@ Resources:
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       AvailabilityZone: !Select [ 0, !GetAZs '' ]
@@ -91,7 +55,6 @@ Resources:
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       AvailabilityZone: !Select [ 1, !GetAZs '' ]
@@ -100,13 +63,11 @@ Resources:
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
-    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
 
   PublicRoute:
     Type: AWS::EC2::Route
-    Condition: CreateNewVPC
     DependsOn: AttachGateway
     Properties:
       RouteTableId: !Ref PublicRouteTable
@@ -115,14 +76,12 @@ Resources:
 
   PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    Condition: CreateNewVPC
     Properties:
       SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
 
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    Condition: CreateNewVPC
     Properties:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
@@ -136,21 +95,21 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: !Ref AllowedCidr
+          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
-          CidrIp: !Ref AllowedCidr
+          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 8501
           ToPort: 8501
-          CidrIp: !Ref AllowedCidr
+          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
-          CidrIp: !Ref AllowedCidr
+          CidrIp: 0.0.0.0/0
           Description: VSCode Server access
-      VpcId: !If [CreateNewVPC, !Ref VPC, !Ref VpcId]
+      VpcId: !Ref VPC
 
   # Lambda function to update secrets
   UpdateSecretFunction:
@@ -251,11 +210,10 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Sub '{{resolve:ssm:/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
-      InstanceType: !Ref InstanceType
-      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+      InstanceType: !Ref EC2InstanceType
       SecurityGroupIds: 
         - !Ref SecurityGroup
-      SubnetId: !If [CreateNewSubnet, !Ref PublicSubnet1, !Ref SubnetId]
+      SubnetId: !Ref PublicSubnet1
       IamInstanceProfile: !Ref EC2InstanceProfile
       Tags:
         - Key: Name
@@ -368,7 +326,6 @@ Resources:
   # Aurora MySQL Cluster
   AuroraDBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
-    Condition: CreateNewVPC
     Properties:
       DBSubnetGroupDescription: Subnet group for Aurora DB
       SubnetIds: 
@@ -391,7 +348,7 @@ Resources:
       DBClusterIdentifier: gamedb1-cluster
       MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:username}}' ]]
       MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:password}}' ]]
-      DBSubnetGroupName: !If [CreateNewVPC, !Ref AuroraDBSubnetGroup, !Ref DBSubnetGroupName]
+      DBSubnetGroupName: !Ref AuroraDBSubnetGroup
       VpcSecurityGroupIds: 
         - !Ref SecurityGroup
 
@@ -415,7 +372,6 @@ Resources:
   # S3 VPC Endpoint
   S3Endpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: CreateNewVPC
     Properties:
       PolicyDocument:
         Version: '2012-10-17'
@@ -433,29 +389,25 @@ Resources:
         - !Ref PublicRouteTable
 
 Outputs:
-  ApplicationURL:
-    Description: VSCode Server URL
-    Value: !Sub "http://${EC2Instance.PublicIp}:8080"
-
-  S3BucketName:
-    Description: S3 Bucket Name
-    Value: !Ref S3Bucket
-
-  CloudWatchLogGroup:
-    Description: CloudWatch Log Group (placeholder)
-    Value: "/aws/ec2/game-log-analysis"
-
-  InstancePublicIP:
-    Description: EC2 Instance Public IP
-    Value: !GetAtt EC2Instance.PublicIp
-
   EC2InstanceId:
     Description: EC2 Instance ID
     Value: !Ref EC2Instance
 
+  EC2PublicIP:
+    Description: EC2 Instance Public IP
+    Value: !GetAtt EC2Instance.PublicIp
+
+  VSCodeServerURL:
+    Description: VSCode Server URL
+    Value: !Sub "http://${EC2Instance.PublicIp}:8080"
+
   VSCodeServerPassword:
     Description: VSCode Server Initial Password
     Value: "gameloganalysis2024!"
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref S3Bucket
 
   AuroraClusterEndpoint:
     Description: Aurora Cluster Endpoint
@@ -463,7 +415,7 @@ Outputs:
 
   S3VPCEndpointId:
     Description: S3 VPC Endpoint ID
-    Value: !If [CreateNewVPC, !Ref S3Endpoint, "N/A - Using existing VPC"]
+    Value: !Ref S3Endpoint
 
   AuroraSecretARN:
     Description: ARN of Aurora Secret
@@ -471,20 +423,20 @@ Outputs:
 
   VpcId:
     Description: VPC ID
-    Value: !If [CreateNewVPC, !Ref VPC, !Ref VpcId]
+    Value: !Ref VPC
 
   PublicSubnet1:
     Description: Public Subnet 1 ID
-    Value: !If [CreateNewVPC, !Ref PublicSubnet1, !Ref SubnetId]
+    Value: !Ref PublicSubnet1
 
   PublicSubnet2:
     Description: Public Subnet 2 ID
-    Value: !If [CreateNewVPC, !Ref PublicSubnet2, "N/A - Using existing subnet"]
+    Value: !Ref PublicSubnet2
 
   PrivateSubnet1:
     Description: Private Subnet 1 ID
-    Value: !If [CreateNewVPC, !Ref PrivateSubnet1, "N/A - Using existing infrastructure"]
+    Value: !Ref PrivateSubnet1
 
   PrivateSubnet2:
     Description: Private Subnet 2 ID
-    Value: !If [CreateNewVPC, !Ref PrivateSubnet2, "N/A - Using existing infrastructure"]
+    Value: !Ref PrivateSubnet2
