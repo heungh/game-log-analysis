@@ -32,17 +32,22 @@ df -h
 
 ## 설치 방법: GitHub 소스에서 빌드
 
-미리 빌드된 패키지를 안정적으로 사용할 수 없으므로, 소스에서 빌드하는 것이 권장되는 방법입니다.
+키네시스 에이전트는 현재 binary 파일이 제공되지 않아 Github 소스에서 최신버전을 빌드해서 사용할수 있습니다. 
 
 ```bash
-# 필요한 도구 설치
+# 필요한 도구 설치 (Java, Maven 설치)
 sudo apt update
 sudo apt install -y git maven openjdk-11-jdk
+
 
 # Java 및 Maven 버전 확인
 java -version
 mvn -version
+```
 
+자바와 메이븐 버전을 확인하여 설치가 정상적으로 되었다면, 아래와 같이 키네시스 에이전트를 빌드합니다. 
+
+```bash
 # 필요한 디렉토리 생성
 sudo mkdir -p /usr/share/aws-kinesis-agent
 sudo mkdir -p /etc/aws-kinesis
@@ -60,7 +65,10 @@ mvn clean package -DskipTests
 
 # 빌드 결과 확인
 ls -la target/
+```
 
+키네시스 에이전트를 빌드하고 만들어진 Jar파일을 옮기는 등의 환경설정 작업을 진행합니다. 
+```bash
 # 의존성을 lib 디렉토리로 복사
 mvn dependency:copy-dependencies -DoutputDirectory=/tmp/kinesis-deps
 sudo mkdir -p /usr/share/aws-kinesis-agent/lib
@@ -82,6 +90,10 @@ sudo tee /etc/aws-kinesis/agent.json << 'EOF'
 }
 EOF
 
+키네시스 에이전트의 환경설정 파일부분은 위와 같이 공백으로 남겨두고 이어지는 실습에서 다시 설정하도록 하겠습니다.
+다음은 설정된 환경을 바탕으로 실행스크립트를 만들고 서비스를 구동시키는 작업입니다. 
+
+```bash
 # 정확한 JAR 파일명으로 실행 스크립트 생성 (2.0.13을 실제 버전으로 교체)
 # 먼저 정확한 버전 번호 확인
 VERSION=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar | sed 's/.*amazon-kinesis-agent-\(.*\)\.jar/\1/')
@@ -128,83 +140,6 @@ ls /usr/share/aws-kinesis-agent/lib/ | wc -l
 aws-kinesis-agent --help
 ```
 
-**중요 사항:**
-- JAR 파일명은 `amazon-kinesis-agent-*.jar`이며, `aws-kinesis-agent-*.jar`가 아닙니다
-- 실행 스크립트에서 와일드카드(`*`) 사용 시 클래스패스 문제가 발생할 수 있습니다
-- 실행 스크립트에서는 항상 정확한 JAR 파일명을 사용해야 합니다
-- 모든 의존성 JAR 파일이 lib 디렉토리에 복사되었는지 확인해야 합니다
-
-## 클래스패스 문제 해결
-
-`ClassNotFoundException` 오류가 발생하는 경우:
-
-### 1. 실행 스크립트 확인
-
-```bash
-# 스크립트가 정확한 JAR 파일명을 사용하는지 확인
-cat /usr/bin/aws-kinesis-agent
-
-# CLASSPATH는 정확한 파일명을 사용해야 합니다:
-# 올바름: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar
-# 잘못됨: /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar
-```
-
-### 2. 정확한 파일명으로 클래스패스 수정
-
-```bash
-# 정확한 JAR 파일명 확인
-JAR_FILE=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar)
-echo "JAR 파일: $JAR_FILE"
-
-# 파일명만 추출
-JAR_NAME=$(basename "$JAR_FILE")
-echo "JAR 이름: $JAR_NAME"
-
-# 정확한 파일명으로 스크립트 재생성
-sudo tee /usr/bin/aws-kinesis-agent << EOF
-#!/bin/bash
-CLASSPATH="/usr/share/aws-kinesis-agent/${JAR_NAME}:/usr/share/aws-kinesis-agent/lib/*"
-java -cp "\$CLASSPATH" \\
-     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \\
-     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \\
-     com.amazon.kinesis.streaming.agent.Agent "\$@"
-EOF
-
-sudo chmod +x /usr/bin/aws-kinesis-agent
-```
-
-### 3. Java로 직접 테스트
-
-```bash
-# Java 명령으로 직접 테스트
-java -cp "/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar:/usr/share/aws-kinesis-agent/lib/*" com.amazon.kinesis.streaming.agent.Agent --help
-```
-
-### 4. 대안: 명시적 JAR 나열
-
-환경에서 와일드카드가 작동하지 않는 경우:
-
-```bash
-sudo tee /usr/bin/aws-kinesis-agent << 'EOF'
-#!/bin/bash
-MAIN_JAR="/usr/share/aws-kinesis-agent/amazon-kinesis-agent-2.0.13.jar"
-LIB_DIR="/usr/share/aws-kinesis-agent/lib"
-CLASSPATH="$MAIN_JAR"
-
-# lib 디렉토리의 모든 JAR 파일을 클래스패스에 추가
-for jar in $LIB_DIR/*.jar; do
-    CLASSPATH="$CLASSPATH:$jar"
-done
-
-java -cp "$CLASSPATH" \
-     -Daws.kinesis.agent.config.file=/etc/aws-kinesis/agent.json \
-     -Dlog4j.configuration=file:///etc/aws-kinesis/log4j.properties \
-     com.amazon.kinesis.streaming.agent.Agent "$@"
-EOF
-
-sudo chmod +x /usr/bin/aws-kinesis-agent
-```
-
 ## 서비스 설정 및 시작
 
 ```bash
@@ -226,7 +161,7 @@ sudo journalctl -u aws-kinesis-agent -f
 설정 파일을 편집합니다:
 
 ```bash
-sudo nano /etc/aws-kinesis/agent.json
+sudo vi /etc/aws-kinesis/agent.json
 ```
 
 설정 예제:
@@ -437,7 +372,7 @@ sudo systemctl reload aws-kinesis-agent
 실행 스크립트를 수정하여 JVM 옵션을 추가할 수 있습니다:
 
 ```bash
-sudo nano /usr/bin/aws-kinesis-agent
+sudo vi /usr/bin/aws-kinesis-agent
 ```
 
 ```bash
@@ -482,4 +417,4 @@ Kinesis Agent 설치 및 설정이 완료되면:
 
 - [Amazon Kinesis Agent GitHub](https://github.com/awslabs/amazon-kinesis-agent)
 - [Kinesis Data Streams 개발자 가이드](https://docs.aws.amazon.com/ko_kr/kinesis/latest/dev/)
-- [Kinesis Data Firehose 개발자 가이드](https://docs.aws.amazon.com/ko_kr/firehose/latest/dev/)
+- [Amazon Data Firehose 개발자 가이드](https://docs.aws.amazon.com/ko_kr/firehose/latest/dev/)
