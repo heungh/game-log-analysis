@@ -3,77 +3,110 @@ title: "Option 3: Fluent Bit 설치"
 weight: 30
 ---
 
-# Fluent Bit 설치 가이드
+# Ubuntu 20.04에서 Fluent Bit 설치 가이드
 
-Fluent Bit은 경량화된 고성능 로그 프로세서 및 포워더로, 다양한 소스에서 데이터를 수집하고 여러 대상으로 전송할 수 있는 CNCF 프로젝트입니다.
+Fluent Bit은 경량화된 고성능 로그 프로세서 및 포워더로, 다양한 소스에서 데이터를 수집하고 여러 대상으로 전송할 수 있는 CNCF 프로젝트입니다. 낮은 메모리 사용량과 높은 처리량을 제공합니다.
 
 ## 사전 요구사항
 
-- Amazon Linux 2023 인스턴스
-- curl, wget, tar, gzip 패키지
-- 적절한 IAM 권한 (CloudWatch, S3, Kinesis 접근 권한)
+- Ubuntu 20.04 LTS EC2 인스턴스
+- 패키지 다운로드를 위한 인터넷 연결
+- AWS 서비스에 대한 적절한 IAM 권한
+- 기본적인 시스템 관리 지식
 
-## 자동 설치
+## 시스템 정보 확인
 
-다음 스크립트를 사용하여 Fluent Bit을 자동으로 설치할 수 있습니다:
+먼저 시스템 정보를 확인합니다:
 
 ```bash
-curl -O https://raw.githubusercontent.com/your-repo/game-log-analytics/main/static/scripts/install-fluent-bit.sh
-chmod +x install-fluent-bit.sh
-sudo ./install-fluent-bit.sh
+# Ubuntu 버전 확인
+lsb_release -a
+
+# 시스템 아키텍처 확인
+uname -a
+
+# 사용 가능한 디스크 공간 확인
+df -h
+
+# 메모리 확인
+free -h
 ```
 
-## 수동 설치 단계
+## 설치 과정
 
-### 1단계: 필수 패키지 설치
+### 1단계: 시스템 업데이트 및 필수 패키지 설치
 
 ```bash
-# 시스템 업데이트 및 필수 패키지 설치
-sudo yum update -y
-sudo yum install -y curl wget tar gzip
+# 시스템 패키지 업데이트
+sudo apt update && sudo apt upgrade -y
+
+# 필수 의존성 설치
+sudo apt install -y curl wget gnupg2 software-properties-common apt-transport-https ca-certificates lsb-release
 ```
 
-### 2단계: Fluent Bit 리포지토리 추가
+### 2단계: Fluent Bit 공식 리포지토리 추가
 
 ```bash
-# Fluent Bit 공식 리포지토리 추가
-sudo tee /etc/yum.repos.d/fluent-bit.repo << 'EOF'
-[fluent-bit]
-name = Fluent Bit
-baseurl = https://packages.fluentbit.io/amazonlinux/2023/$basearch/
-gpgcheck=1
-gpgkey=https://packages.fluentbit.io/fluentbit.key
-enabled=1
-EOF
+# Fluent Bit GPG 키 추가
+wget -qO - https://packages.fluentbit.io/fluentbit.key | sudo apt-key add -
+
+# Ubuntu 20.04 (focal)용 리포지토리 추가
+echo "deb https://packages.fluentbit.io/ubuntu/focal focal main" | sudo tee /etc/apt/sources.list.d/fluent-bit.list
+
+# 패키지 목록 업데이트
+sudo apt update
 ```
 
 ### 3단계: Fluent Bit 설치
 
 ```bash
 # Fluent Bit 설치
-sudo yum install -y fluent-bit
+sudo apt install -y fluent-bit
+
+# 설치 경로 확인
+ls -la /opt/fluent-bit/bin/fluent-bit
+
+# 버전 확인
+/opt/fluent-bit/bin/fluent-bit --version
 ```
 
-### 4단계: 디렉토리 생성 및 권한 설정
+### 4단계: 실행 경로 설정
+
+```bash
+# 심볼릭 링크 생성 (편의를 위해)
+sudo ln -sf /opt/fluent-bit/bin/fluent-bit /usr/local/bin/fluent-bit
+
+# PATH 새로고침
+hash -r
+```
+
+### 5단계: 디렉토리 및 권한 설정
 
 ```bash
 # 필요한 디렉토리 생성
-sudo mkdir -p /etc/fluent-bit
+sudo mkdir -p /var/log/game
 sudo mkdir -p /var/log/fluent-bit
-sudo mkdir -p /var/log/game-logs
-sudo mkdir -p /var/lib/fluent-bit
 
 # 권한 설정
-sudo chown -R fluent-bit:fluent-bit /var/log/fluent-bit
-sudo chown -R fluent-bit:fluent-bit /var/lib/fluent-bit
-sudo chown -R ec2-user:ec2-user /var/log/game-logs
+sudo chown ubuntu:ubuntu /var/log/game
+sudo chmod 755 /var/log/game
+sudo chmod 755 /var/log/fluent-bit
+
+# 디렉토리 확인
+ls -la /var/log/ | grep -E "(game|fluent)"
 ```
 
-### 5단계: Fluent Bit 설정 파일 생성
+## 설정
 
-#### 메인 설정 파일 생성
+### 기본 설정 파일 생성
+
+메모리 최적화가 포함된 설정 파일을 생성합니다:
 
 ```bash
+# 기존 설정 파일 백업 (있다면)
+sudo cp /etc/fluent-bit/fluent-bit.conf /etc/fluent-bit/fluent-bit.conf.backup 2>/dev/null || echo "기존 설정 파일 없음"
+
+# 새로운 설정 파일 생성
 sudo tee /etc/fluent-bit/fluent-bit.conf << 'EOF'
 [SERVICE]
     Flush         1
@@ -83,239 +116,230 @@ sudo tee /etc/fluent-bit/fluent-bit.conf << 'EOF'
     HTTP_Server   On
     HTTP_Listen   0.0.0.0
     HTTP_Port     2020
-    storage.path  /var/lib/fluent-bit/
+    storage.path  /var/log/fluent-bit/
+    storage.sync  normal
+    storage.checksum off
+    storage.backlog.mem_limit 5M
 
 [INPUT]
     Name              tail
-    Path              /var/log/game-logs/*.log
+    Path              /var/log/game/*.log
     Tag               game.logs
-    Parser            json
-    DB                /var/lib/fluent-bit/game-logs.db
-    Mem_Buf_Limit     50MB
-    Skip_Long_Lines   On
-    Refresh_Interval  10
-
-[INPUT]
-    Name              systemd
-    Tag               system.logs
-    Systemd_Filter    _SYSTEMD_UNIT=sshd.service
-    Systemd_Filter    _SYSTEMD_UNIT=amazon-ssm-agent.service
-
-[FILTER]
-    Name                aws
-    Match               *
-    imds_version        v2
-    az                  true
-    ec2_instance_id     true
-    ec2_instance_type   true
-    private_ip          true
-    vpc_id              true
-    ami_id              true
-    account_id          true
-    hostname            true
-    region              us-east-1
-
-[FILTER]
-    Name          modify
-    Match         game.logs
-    Add           source game-server
-    Add           environment production
+    Refresh_Interval  5
+    Read_from_Head    true
+    Buffer_Chunk_Size 32k
+    Buffer_Max_Size   256k
+    Mem_Buf_Limit     1M
 
 [OUTPUT]
-    Name                cloudwatch_logs
-    Match               game.logs
-    region              us-east-1
-    log_group_name      /aws/ec2/fluent-bit/game-logs
-    log_stream_prefix   game-server-
-    auto_create_group   true
-
-[OUTPUT]
-    Name                kinesis_streams
-    Match               game.logs
-    region              us-east-1
-    stream              game-log-stream
-    partition_key       player_id
-    append_newline      false
-
-[OUTPUT]
-    Name                s3
-    Match               game.logs
-    bucket              datapipelinebucket${AWS_ACCOUNT_ID}us-east-1
-    region              us-east-1
-    total_file_size     50M
-    s3_key_format       /game-logs/year=%Y/month=%m/day=%d/hour=%H/fluent-bit-logs-%Y%m%d-%H%M%S
-    s3_key_format_tag_delimiters .-
-    store_dir           /var/lib/fluent-bit/s3
-    upload_timeout      10m
-
-[OUTPUT]
-    Name                forward
-    Match               system.logs
-    Host                127.0.0.1
-    Port                24224
-    tls                 off
-    tls.verify          off
+    Name  stdout
+    Match *
 EOF
 ```
 
-#### 파서 설정 파일 생성
+### 설정 옵션 설명
 
-```bash
-sudo tee /etc/fluent-bit/parsers.conf << 'EOF'
-[PARSER]
-    Name        json
-    Format      json
-    Time_Key    timestamp
-    Time_Format %Y-%m-%dT%H:%M:%S.%L
-    Time_Keep   On
-
-[PARSER]
-    Name        game_log
-    Format      regex
-    Regex       ^(?<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \[(?<level>\w+)\] (?<message>.*)$
-    Time_Key    timestamp
-    Time_Format %Y-%m-%dT%H:%M:%S.%L
-    Time_Keep   On
-
-[PARSER]
-    Name        apache
-    Format      regex
-    Regex       ^(?<host>[^ ]*) [^ ]* (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
-    Time_Key    time
-    Time_Format %d/%b/%Y:%H:%M:%S %z
-
-[PARSER]
-    Name        nginx
-    Format      regex
-    Regex       ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*)(?:\?(?<query>[^ ]*))?(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
-    Time_Key    time
-    Time_Format %d/%b/%Y:%H:%M:%S %z
-EOF
-```
-
-### 6단계: systemd 서비스 설정
-
-```bash
-# systemd 서비스 파일 생성 (필요시)
-sudo tee /etc/systemd/system/fluent-bit.service << 'EOF'
-[Unit]
-Description=Fluent Bit
-Documentation=https://fluentbit.io/documentation/
-Requires=network.target
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-RestartSec=2
-User=fluent-bit
-Group=fluent-bit
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-### 7단계: 서비스 시작
-
-```bash
-# systemd 데몬 리로드
-sudo systemctl daemon-reload
-
-# 서비스 활성화 및 시작
-sudo systemctl enable fluent-bit
-sudo systemctl start fluent-bit
-
-# 상태 확인
-sudo systemctl status fluent-bit
-```
-
-## 설정 파일 상세 설명
-
-### SERVICE 섹션
-
+**SERVICE 섹션:**
 - `Flush`: 출력 플러시 간격 (초)
 - `Log_Level`: 로그 레벨 (error, warn, info, debug, trace)
-- `HTTP_Server`: HTTP 서버 활성화
+- `HTTP_Server`: HTTP API 서버 활성화
 - `HTTP_Port`: HTTP API 포트
+- `storage.backlog.mem_limit`: 메모리 백로그 제한
 
-### INPUT 섹션
+**INPUT 섹션:**
+- `Name`: 입력 플러그인 이름 (tail)
+- `Path`: 모니터링할 로그 파일 경로
+- `Tag`: 로그에 할당할 태그
+- `Read_from_Head`: 파일 처음부터 읽기
+- `Mem_Buf_Limit`: 메모리 버퍼 제한
 
-- `tail`: 파일 모니터링
-- `systemd`: systemd 저널 로그 수집
+**OUTPUT 섹션:**
+- `Name`: 출력 플러그인 이름 (stdout)
+- `Match`: 매칭할 태그 패턴
 
-### FILTER 섹션
+## 서비스 관리
 
-- `aws`: AWS 메타데이터 추가
-- `modify`: 필드 추가/수정
-
-### OUTPUT 섹션
-
-- `cloudwatch_logs`: CloudWatch Logs로 전송
-- `kinesis_streams`: Kinesis Data Streams로 전송
-- `s3`: S3 버킷으로 아카이브
-
-## 관리 명령어
-
-설치 후 다음 관리 스크립트를 사용할 수 있습니다:
+### 서비스 시작 및 활성화
 
 ```bash
-# 관리 스크립트 사용법
-./manage-fluent-bit.sh {start|stop|restart|status|logs|config|validate|test|api|metrics|uptime|health}
-```
-
-### 주요 명령어
-
-```bash
-# 서비스 상태 확인
-./manage-fluent-bit.sh status
-
-# 로그 실시간 확인
-./manage-fluent-bit.sh logs
-
 # 설정 파일 검증
-./manage-fluent-bit.sh validate
+sudo /opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf --dry-run
 
-# 테스트 로그 생성
-./manage-fluent-bit.sh test
+# 서비스 시작
+sudo systemctl start fluent-bit
 
-# HTTP API 상태 확인
-./manage-fluent-bit.sh api
+# 서비스 상태 확인
+sudo systemctl status fluent-bit
 
-# 헬스 체크
-./manage-fluent-bit.sh health
+# 서비스 활성화 (부팅 시 자동 시작)
+sudo systemctl enable fluent-bit
 ```
 
-## HTTP API
-
-Fluent Bit은 HTTP API를 제공합니다 (포트 2020):
+### 설치 확인
 
 ```bash
-# 헬스 체크
-curl http://localhost:2020/api/v1/health
+# 서비스 활성 상태 확인
+sudo systemctl is-active fluent-bit
+
+# 프로세스 확인
+ps aux | grep fluent-bit
+
+# HTTP API 확인
+curl http://localhost:2020/
 
 # 메트릭 확인
 curl http://localhost:2020/api/v1/metrics
-
-# 업타임 확인
-curl http://localhost:2020/api/v1/uptime
-
-# 설정 정보
-curl http://localhost:2020/
 ```
 
 ## 테스트
 
-설치가 완료되면 테스트 로그를 생성하여 정상 작동을 확인할 수 있습니다:
+### 테스트 로그 생성
 
 ```bash
-# 테스트 로그 생성
-echo '{"timestamp":"'$(date -Iseconds)'","level":"INFO","message":"Test game event from Fluent Bit","player_id":"test456","event_type":"logout","score":1500}' >> /var/log/game-logs/game.log
+# 간단한 테스트 로그 생성
+echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_001","action":"login","level":1}' >> /var/log/game/test.log
+echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_002","action":"logout","level":5}' >> /var/log/game/test.log
 
-# Fluent Bit 로그 확인
+# 생성된 로그 확인
+cat /var/log/game/test.log
+```
+
+### 연속 테스트 로그 생성
+
+```bash
+# 테스트 로그 생성 스크립트 생성
+cat > ~/generate_test_logs.sh << 'EOF'
+#!/bin/bash
+LOG_FILE="/var/log/game/game.log"
+counter=1
+
+echo "Fluent Bit 테스트 로그 생성 시작..."
+
+while true; do
+    timestamp=$(date -Iseconds)
+    user_id="user_$((RANDOM%100))"
+    actions=("login" "logout" "level_up" "purchase" "battle")
+    action=${actions[$RANDOM % ${#actions[@]}]}
+    level=$((RANDOM%100))
+    
+    echo "{\"timestamp\":\"$timestamp\",\"user_id\":\"$user_id\",\"action\":\"$action\",\"level\":$level,\"counter\":$counter}" >> $LOG_FILE
+    echo "로그 항목 $counter 생성됨: $action by $user_id"
+    
+    counter=$((counter + 1))
+    sleep 2
+done
+EOF
+
+chmod +x ~/generate_test_logs.sh
+
+# 백그라운드에서 실행
+nohup ~/generate_test_logs.sh > ~/test_log_generator.out 2>&1 &
+```
+
+## 모니터링
+
+### 실시간 로그 모니터링
+
+```bash
+# 게임 로그 실시간 모니터링
+tail -f /var/log/game/game.log
+
+# Fluent Bit 서비스 로그 모니터링
 sudo journalctl -u fluent-bit -f
+
+# 최근 로그 확인
+sudo journalctl -u fluent-bit -n 20
+```
+
+### 성능 모니터링
+
+```bash
+# 리소스 사용량 확인
+top -p $(pgrep fluent-bit)
+
+# 메모리 사용량 확인
+ps aux | grep fluent-bit | grep -v grep
+
+# 네트워크 연결 확인
+sudo ss -tulpn | grep 2020
+```
+
+### HTTP API를 통한 모니터링
+
+```bash
+# 기본 정보 확인
+curl http://localhost:2020/
+
+# 메트릭 확인
+curl http://localhost:2020/api/v1/metrics
+
+# 설정 정보 확인
+curl http://localhost:2020/api/v1/config
+
+# 헬스 체크
+curl http://localhost:2020/api/v1/health
+```
+
+## 고급 설정
+
+### AWS Kinesis Streams 연동
+
+```bash
+# Kinesis Streams용 설정 파일 생성
+sudo tee /etc/fluent-bit/kinesis.conf << 'EOF'
+[SERVICE]
+    Flush         1
+    Log_Level     info
+    Daemon        off
+    HTTP_Server   On
+    HTTP_Listen   0.0.0.0
+    HTTP_Port     2020
+
+[INPUT]
+    Name              tail
+    Path              /var/log/game/*.log
+    Tag               game.logs
+    Read_from_Head    true
+
+[FILTER]
+    Name parser
+    Match game.logs
+    Key_Name message
+    Parser json
+
+[OUTPUT]
+    Name kinesis_streams
+    Match *
+    region ap-northeast-2
+    stream game-log-stream
+    partition_key user_id
+EOF
+```
+
+### CloudWatch Logs 연동
+
+```bash
+# CloudWatch Logs용 설정 파일 생성
+sudo tee /etc/fluent-bit/cloudwatch.conf << 'EOF'
+[SERVICE]
+    Flush         1
+    Log_Level     info
+    Daemon        off
+
+[INPUT]
+    Name              tail
+    Path              /var/log/game/*.log
+    Tag               game.logs
+    Read_from_Head    true
+
+[OUTPUT]
+    Name cloudwatch_logs
+    Match *
+    region ap-northeast-2
+    log_group_name /aws/ec2/game-logs
+    log_stream_name ${hostname}
+    auto_create_group true
+EOF
 ```
 
 ## 문제 해결
@@ -325,6 +349,7 @@ sudo journalctl -u fluent-bit -f
 1. **서비스 시작 실패**
    ```bash
    sudo journalctl -u fluent-bit -n 50
+   sudo systemctl restart fluent-bit
    ```
 
 2. **설정 파일 오류**
@@ -335,63 +360,89 @@ sudo journalctl -u fluent-bit -f
 3. **권한 문제**
    ```bash
    sudo chown -R fluent-bit:fluent-bit /var/log/fluent-bit
-   sudo chown -R fluent-bit:fluent-bit /var/lib/fluent-bit
+   sudo chmod 644 /var/log/game/*.log
    ```
 
-4. **메모리 사용량 문제**
+4. **메모리 부족**
    ```bash
-   # fluent-bit.conf에서 Mem_Buf_Limit 조정
-   Mem_Buf_Limit     10MB
+   # 설정 파일에서 메모리 제한 조정
+   Mem_Buf_Limit     512k
+   storage.backlog.mem_limit 2M
    ```
 
 ### 로그 파일 위치
 
-- Fluent Bit 로그: `sudo journalctl -u fluent-bit`
-- 설치 로그: `/var/log/fluent-bit-install.log`
-- 게임 로그: `/var/log/game-logs/`
-- Fluent Bit 데이터: `/var/lib/fluent-bit/`
+- Fluent Bit 서비스 로그: `sudo journalctl -u fluent-bit`
+- 설정 파일: `/etc/fluent-bit/fluent-bit.conf`
+- 게임 로그: `/var/log/game/`
+- Fluent Bit 데이터: `/var/log/fluent-bit/`
+
+## 관리 명령어
+
+```bash
+# 서비스 시작
+sudo systemctl start fluent-bit
+
+# 서비스 중지
+sudo systemctl stop fluent-bit
+
+# 서비스 재시작
+sudo systemctl restart fluent-bit
+
+# 상태 확인
+sudo systemctl status fluent-bit
+
+# 로그 확인
+sudo journalctl -u fluent-bit -f
+
+# 설정 검증
+sudo /opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf --dry-run
+
+# 테스트 로그 생성기 중지
+pkill -f generate_test_logs.sh
+```
 
 ## 성능 최적화
 
-### 메모리 사용량 최적화
+### 메모리 제한 환경 최적화
 
-```ini
+```toml
+[SERVICE]
+    storage.backlog.mem_limit 2M
+    
 [INPUT]
-    Name              tail
-    Path              /var/log/game-logs/*.log
-    Mem_Buf_Limit     10MB
-    Skip_Long_Lines   On
-    Buffer_Chunk_Size 32k
-    Buffer_Max_Size   256k
+    Mem_Buf_Limit     512k
+    Buffer_Chunk_Size 16k
+    Buffer_Max_Size   128k
 ```
 
 ### 배치 처리 최적화
 
-```ini
+```toml
 [OUTPUT]
-    Name                cloudwatch_logs
-    Match               game.logs
-    workers             2
-```
-
-## 모니터링
-
-### 메트릭 수집
-
-```bash
-# Prometheus 메트릭 형식으로 확인
-curl http://localhost:2020/api/v1/metrics/prometheus
-```
-
-### 로그 통계
-
-```bash
-# 입력/출력 통계 확인
-curl http://localhost:2020/api/v1/metrics | jq '.input'
-curl http://localhost:2020/api/v1/metrics | jq '.output'
+    Name kinesis_streams
+    Match *
+    region ap-northeast-2
+    stream game-log-stream
+    batch_size 100
+    batch_timeout 5s
 ```
 
 ## 다음 단계
 
-Fluent Bit 설치가 완료되면 Amazon Data Firehose를 생성하고 데이터 스트림을 Firehose로 보내는 방법을 진행하게 됩니다.
-Fluent Bit에 대한 자세한 내용은 [Fluent Bit 공식 문서](https://docs.fluentbit.io/)를 참조하세요.
+Fluent Bit 설치 및 설정이 완료되면:
+
+1. Amazon Kinesis Data Stream 또는 Data Firehose 생성
+2. EC2 인스턴스에 대한 IAM 권한 설정
+3. 스트림 세부 정보로 Fluent Bit 설정 업데이트
+4. AWS 콘솔에서 데이터 흐름 모니터링
+5. CloudWatch 대시보드 설정
+
+자세한 정보는 [Fluent Bit 공식 문서](https://docs.fluentbit.io/)를 참조하세요.
+
+## 참고 자료
+
+- [Fluent Bit GitHub 저장소](https://github.com/fluent/fluent-bit)
+- [Fluent Bit 설정 가이드](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit)
+- [AWS 출력 플러그인](https://docs.fluentbit.io/manual/pipeline/outputs/kinesis)
+- [성능 튜닝 가이드](https://docs.fluentbit.io/manual/administration/memory-management)
