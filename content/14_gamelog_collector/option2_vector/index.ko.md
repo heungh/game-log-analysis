@@ -29,9 +29,9 @@ uname -a
 df -h
 ```
 
-## 설치 방법
+## Vector 설치
 
-### 방법 1: 직접 DEB 패키지 설치 (권장)
+### 바이너리 직접 설치 방법
 
 ```bash
 # 시스템 패키지 업데이트
@@ -40,20 +40,6 @@ sudo apt update && sudo apt upgrade -y
 # 필수 의존성 설치
 sudo apt install -y curl wget gnupg2 software-properties-common apt-transport-https ca-certificates
 
-# Vector DEB 패키지 다운로드
-cd /tmp
-wget https://github.com/vectordotdev/vector/releases/download/v0.34.1/vector_0.34.1-1_amd64.deb
-
-# 패키지 설치
-sudo dpkg -i vector_0.34.1-1_amd64.deb
-
-# 의존성 문제 해결
-sudo apt-get install -f -y
-```
-
-### 방법 2: 바이너리 설치 (대안)
-
-```bash
 # Vector 바이너리 다운로드
 cd /tmp
 wget https://github.com/vectordotdev/vector/releases/download/v0.34.1/vector-0.34.1-x86_64-unknown-linux-musl.tar.gz
@@ -67,7 +53,7 @@ sudo chmod +x /usr/local/bin/vector
 sudo useradd --system --shell /bin/false --home-dir /var/lib/vector vector
 ```
 
-## 디렉토리 설정
+## 디렉토리 및 권한 설정
 
 ```bash
 # 필요한 디렉토리 생성
@@ -81,35 +67,19 @@ sudo chown -R vector:vector /etc/vector
 sudo chown -R vector:vector /var/log/vector
 sudo chown -R vector:vector /var/lib/vector
 sudo chown ubuntu:ubuntu /var/log/game
+
+# 권한 설정
+sudo chmod -R 755 /var/lib/vector
+sudo chmod -R 755 /var/log/vector
+sudo chmod 755 /var/log/game
 ```
 
-## 설정
+## Vector 설정
 
-### 기본 설정 파일
-
-메인 설정 파일을 생성합니다:
+### 기본 설정 파일 생성
 
 ```bash
-# Vector 설정 파일 생성
-sudo tee /etc/vector/vector.toml << 'EOF'
-data_dir = "/var/lib/vector"
-
-[sources.game_logs]
-type = "file"
-include = ["/var/log/game/*.log"]
-read_from = "beginning"
-
-[sinks.stdout]
-type = "console"
-inputs = ["game_logs"]
-encoding.codec = "text"
-EOF
-```
-
-### 변환 기능이 포함된 고급 설정
-
-```bash
-# 고급 설정 파일 생성
+# Vector 기본 설정 파일 생성
 sudo tee /etc/vector/vector.toml << 'EOF'
 data_dir = "/var/lib/vector"
 
@@ -118,26 +88,75 @@ data_dir = "/var/lib/vector"
 type = "file"
 include = ["/var/log/game/*.log"]
 read_from = "beginning"
+
+# 변환: 기본 메타데이터 추가
+[transforms.add_metadata]
+type = "remap"
+inputs = ["game_logs"]
+source = '''
+.timestamp = now()
+.hostname = get_hostname!()
+.source = "vector-agent"
+.original_message = .message
+'''
+
+# 싱크: 콘솔 출력
+[sinks.console]
+type = "console"
+inputs = ["add_metadata"]
+encoding.codec = "json"
+
+# 싱크: 파일 출력
+[sinks.file_output]
+type = "file"
+inputs = ["add_metadata"]
+path = "/var/log/vector/processed_logs.log"
+encoding.codec = "json"
+EOF
+```
+
+### JSON 파싱이 포함된 고급 설정
+
+```bash
+# JSON 파싱을 포함한 고급 설정 (선택사항)
+sudo tee /etc/vector/vector-advanced.toml << 'EOF'
+data_dir = "/var/lib/vector"
+
+[sources.game_logs]
+type = "file"
+include = ["/var/log/game/*.log"]
+read_from = "beginning"
 ignore_older_secs = 86400
 
-# 변환: JSON 로그 파싱 및 데이터 보강
 [transforms.parse_logs]
 type = "remap"
 inputs = ["game_logs"]
 source = '''
-. = parse_json!(.message) ?? .
+# 기본 메타데이터 추가
 .timestamp = now()
 .hostname = get_hostname!()
 .source = "vector-agent"
+
+# JSON 파싱 시도 (안전한 방법)
+if is_string(.message) {
+  parsed_json, parse_err = parse_json(.message)
+  if parse_err == null {
+    .parsed_data = parsed_json
+    .is_json = true
+  } else {
+    .is_json = false
+    .parse_error = to_string(parse_err)
+  }
+} else {
+  .is_json = false
+}
 '''
 
-# 싱크: 콘솔 출력 (테스트용)
 [sinks.console]
 type = "console"
 inputs = ["parse_logs"]
 encoding.codec = "json"
 
-# 싱크: 파일 출력
 [sinks.file_output]
 type = "file"
 inputs = ["parse_logs"]
@@ -146,10 +165,99 @@ encoding.codec = "json"
 EOF
 ```
 
-### AWS Kinesis 설정
+## systemd 서비스 설정
+
+### 서비스 파일 생성
 
 ```bash
-# AWS Kinesis Streams용 설정
+# systemd 서비스 파일 생성
+sudo tee /etc/systemd/system/vector.service << 'EOF'
+[Unit]
+Description=Vector
+Documentation=https://vector.dev
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+User=vector
+Group=vector
+ExecStartPre=/usr/local/bin/vector validate --no-environment /etc/vector/vector.toml
+ExecStart=/usr/local/bin/vector --config /etc/vector/vector.toml
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+Restart=always
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 서비스 시작 및 활성화
+
+```bash
+# systemd 데몬 리로드
+sudo systemctl daemon-reload
+
+# 설정 검증
+sudo /usr/local/bin/vector validate /etc/vector/vector.toml
+
+# 서비스 활성화 및 시작
+sudo systemctl enable vector
+sudo systemctl start vector
+
+# 서비스 상태 확인
+sudo systemctl status vector
+```
+
+## 설치 확인 및 테스트
+
+### Vector 설치 확인
+
+```bash
+# Vector 버전 확인
+/usr/local/bin/vector --version
+
+# 서비스 상태 확인
+sudo systemctl is-active vector
+
+# 프로세스 확인
+ps aux | grep vector
+```
+
+### 테스트 로그 생성
+
+```bash
+# 기본 테스트 로그 생성
+echo "Test message from game" | sudo tee /var/log/game/test.log
+
+# JSON 형식 테스트 로그 생성
+echo '{"user_id": "user123", "action": "login", "level": 25}' | sudo tee -a /var/log/game/test.log
+
+# 추가 테스트 로그
+echo "$(date -Iseconds) - Game server started" | sudo tee -a /var/log/game/test.log
+```
+
+### Vector 출력 확인
+
+```bash
+# Vector 서비스 로그 실시간 확인
+sudo journalctl -u vector -f
+
+# 처리된 로그 파일 확인
+sudo tail -f /var/log/vector/processed_logs.log
+
+# 콘솔 출력 확인 (별도 터미널에서)
+sudo journalctl -u vector -n 20
+```
+
+## AWS Kinesis 연동 설정
+
+### Kinesis Streams 설정
+
+```bash
+# AWS Kinesis Streams용 설정 파일
 sudo tee /etc/vector/vector-kinesis.toml << 'EOF'
 data_dir = "/var/lib/vector"
 
@@ -158,19 +266,19 @@ type = "file"
 include = ["/var/log/game/*.log"]
 read_from = "beginning"
 
-[transforms.parse_and_enrich]
+[transforms.add_metadata]
 type = "remap"
 inputs = ["game_logs"]
 source = '''
-. = parse_json!(.message) ?? .
 .timestamp = now()
 .hostname = get_hostname!()
 .source = "vector-agent"
+.original_message = .message
 '''
 
 [sinks.kinesis_stream]
 type = "aws_kinesis_streams"
-inputs = ["parse_and_enrich"]
+inputs = ["add_metadata"]
 stream_name = "game-log-stream"
 region = "ap-northeast-1"
 encoding.codec = "json"
@@ -185,118 +293,108 @@ request.timeout_secs = 30
 EOF
 ```
 
-## 서비스 설정
-
-### 파일 권한 설정
+### Kinesis 설정 적용
 
 ```bash
-# 적절한 권한 설정
-sudo chown vector:vector /etc/vector/vector.toml
-sudo chmod 644 /etc/vector/vector.toml
-```
+# Kinesis 설정으로 변경 (필요시)
+sudo cp /etc/vector/vector-kinesis.toml /etc/vector/vector.toml
 
-### systemd 서비스 생성 (필요시)
-
-```bash
-# systemd 서비스 파일 생성
-sudo tee /etc/systemd/system/vector.service << 'EOF'
-[Unit]
-Description=Vector
-Documentation=https://vector.dev
-After=network-online.target
-Requires=network-online.target
-
-[Service]
-User=vector
-Group=vector
-ExecStartPre=/usr/bin/vector validate --no-environment /etc/vector/vector.toml
-ExecStart=/usr/bin/vector --config /etc/vector/vector.toml
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
-Restart=always
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# systemd 데몬 리로드
-sudo systemctl daemon-reload
-```
-
-## 서비스 관리
-
-### Vector 시작 및 활성화
-
-```bash
 # 설정 검증
-sudo vector validate /etc/vector/vector.toml
+sudo /usr/local/bin/vector validate /etc/vector/vector.toml
 
-# 서비스 활성화 및 시작
-sudo systemctl enable vector
-sudo systemctl start vector
-
-# 서비스 상태 확인
-sudo systemctl status vector
+# 서비스 재시작
+sudo systemctl restart vector
 ```
 
-### 설치 확인
+## 모니터링 및 문제 해결
+
+### 로그 모니터링
 
 ```bash
-# Vector 버전 확인
-vector --version
+# Vector 서비스 로그 확인
+sudo journalctl -u vector -n 50
 
-# 서비스가 활성화되었는지 확인
-sudo systemctl is-active vector
+# 실시간 로그 모니터링
+sudo journalctl -u vector -f
 
-# 프로세스 확인
-ps aux | grep vector
-
-# 서비스 로그 확인
-sudo journalctl -u vector -n 20
+# 처리된 로그 확인
+sudo tail -f /var/log/vector/processed_logs.log
 ```
 
-## 테스트
-
-### 테스트 로그 생성
+### 성능 모니터링
 
 ```bash
-# 테스트 로그 생성 스크립트 생성
-cat > ~/generate_vector_test_logs.sh << 'EOF'
-#!/bin/bash
-LOG_FILE="/var/log/game/vector_test.log"
-echo "Vector 테스트 로그 생성 시작..."
+# Vector 프로세스 리소스 사용량
+top -p $(pgrep vector)
 
-for i in {1..5}; do
-    echo "$(date -Iseconds) - Vector 테스트 로그 항목 $i" >> $LOG_FILE
-    echo "로그 항목 $i 생성됨"
-    sleep 2
-done
+# 메모리 사용량 확인
+ps aux | grep vector | grep -v grep
 
-echo "테스트 로그 생성 완료!"
-EOF
-
-chmod +x ~/generate_vector_test_logs.sh
-
-# 테스트 로그 생성 실행
-~/generate_vector_test_logs.sh
+# 디스크 사용량 확인
+du -sh /var/lib/vector /var/log/vector
 ```
 
-### JSON 테스트 로그 생성
+### 일반적인 문제 해결
+
+1. **서비스 시작 실패**
+   ```bash
+   # 자세한 로그 확인
+   sudo journalctl -u vector -n 50
+   
+   # 설정 검증
+   sudo /usr/local/bin/vector validate /etc/vector/vector.toml
+   
+   # 직접 실행으로 문제 확인
+   sudo /usr/local/bin/vector --config /etc/vector/vector.toml
+   ```
+
+2. **권한 문제**
+   ```bash
+   # 권한 재설정
+   sudo chown -R vector:vector /var/lib/vector
+   sudo chown -R vector:vector /var/log/vector
+   sudo chmod 755 /var/log/game
+   ```
+
+3. **로그 파일 접근 문제**
+   ```bash
+   # 로그 파일 권한 확인
+   ls -la /var/log/game/
+   
+   # 필요시 권한 수정
+   sudo chmod 644 /var/log/game/*.log
+   ```
+
+## 연속 테스트 로그 생성
+
+### 자동 로그 생성 스크립트
 
 ```bash
-# JSON 형식 테스트 로그 생성
-echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_123","action":"login","level":25}' >> /var/log/game/game.log
-
-# 연속 테스트 로그 생성
+# 연속 테스트 로그 생성 스크립트
 cat > ~/continuous_test_logs.sh << 'EOF'
 #!/bin/bash
 LOG_FILE="/var/log/game/continuous.log"
 counter=1
 
+echo "연속 테스트 로그 생성 시작..."
+
 while true; do
-    echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_'$((RANDOM%100))'","action":"test_action","level":'$((RANDOM%50))',"counter":'$counter'}' >> $LOG_FILE
+    # 다양한 형태의 로그 생성
+    case $((counter % 4)) in
+        0)
+            echo "$(date -Iseconds) - User login: user_$((RANDOM%100))" >> $LOG_FILE
+            ;;
+        1)
+            echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_'$((RANDOM%100))'","action":"gameplay","level":'$((RANDOM%50))'}' >> $LOG_FILE
+            ;;
+        2)
+            echo "$(date -Iseconds) - Server event: maintenance_check" >> $LOG_FILE
+            ;;
+        3)
+            echo '{"timestamp":"'$(date -Iseconds)'","event":"purchase","item_id":"item_'$((RANDOM%20))'","price":'$((RANDOM%1000))'}' >> $LOG_FILE
+            ;;
+    esac
+    
     echo "로그 항목 $counter 생성됨"
     counter=$((counter + 1))
     sleep 3
@@ -304,139 +402,22 @@ done
 EOF
 
 chmod +x ~/continuous_test_logs.sh
-
-# 백그라운드에서 실행
-nohup ~/continuous_test_logs.sh &
 ```
 
-## 모니터링 및 문제 해결
-
-### Vector 활동 모니터링
+### 백그라운드 실행
 
 ```bash
-# 실시간 서비스 로그
-sudo journalctl -u vector -f
+# 백그라운드에서 연속 로그 생성
+nohup ~/continuous_test_logs.sh > ~/log_generator.out 2>&1 &
 
-# 처리된 로그 확인 (파일 싱크가 설정된 경우)
-sudo tail -f /var/log/vector/processed_logs.log
+# 프로세스 확인
+ps aux | grep continuous_test_logs
 
-# 리소스 사용량 모니터링
-top -p $(pgrep vector)
-
-# 네트워크 연결 확인
-sudo ss -tulpn | grep vector
+# 로그 생성 중지 (필요시)
+pkill -f continuous_test_logs.sh
 ```
 
-### 일반적인 문제
-
-1. **서비스 시작 실패**
-   ```bash
-   sudo journalctl -u vector -n 50
-   sudo systemctl restart vector
-   ```
-
-2. **설정 오류**
-   ```bash
-   sudo vector validate /etc/vector/vector.toml
-   ```
-
-3. **권한 문제**
-   ```bash
-   sudo chown -R vector:vector /var/lib/vector
-   sudo chown -R vector:vector /var/log/vector
-   ```
-
-4. **파일 접근 문제**
-   ```bash
-   sudo chmod 644 /var/log/game/*.log
-   sudo chown ubuntu:ubuntu /var/log/game
-   ```
-
-### 로그 파일 위치
-
-- Vector 서비스 로그: `sudo journalctl -u vector`
-- Vector 출력 로그: `/var/log/vector/`
-- 설정 파일: `/etc/vector/vector.toml`
-- 데이터 디렉토리: `/var/lib/vector/`
-- 게임 로그: `/var/log/game/`
-
-## 고급 설정
-
-### 다중 소스 및 싱크
-
-```toml
-data_dir = "/var/lib/vector"
-
-# 소스 1: 로그인 로그
-[sources.login_logs]
-type = "file"
-include = ["/var/log/game/login*.log"]
-
-# 소스 2: 게임플레이 로그
-[sources.gameplay_logs]
-type = "file"
-include = ["/var/log/game/gameplay*.log"]
-
-# 변환: 로그인 로그 처리
-[transforms.process_login]
-type = "remap"
-inputs = ["login_logs"]
-source = '''
-. = parse_json!(.message) ?? .
-.log_type = "login"
-.processed_at = now()
-'''
-
-# 변환: 게임플레이 로그 처리
-[transforms.process_gameplay]
-type = "remap"
-inputs = ["gameplay_logs"]
-source = '''
-. = parse_json!(.message) ?? .
-.log_type = "gameplay"
-.processed_at = now()
-'''
-
-# 싱크: 다른 Kinesis 스트림으로 전송
-[sinks.login_kinesis]
-type = "aws_kinesis_streams"
-inputs = ["process_login"]
-stream_name = "game-login-stream"
-region = "ap-northeast-1"
-
-[sinks.gameplay_kinesis]
-type = "aws_kinesis_streams"
-inputs = ["process_gameplay"]
-stream_name = "game-play-stream"
-region = "ap-northeast-1"
-```
-
-## 성능 튜닝
-
-### 메모리 최적화
-
-```toml
-# vector.toml에 추가
-[sources.game_logs]
-type = "file"
-include = ["/var/log/game/*.log"]
-max_line_bytes = 102400
-max_read_bytes = 2048
-```
-
-### 배치 처리
-
-```toml
-[sinks.kinesis_stream]
-type = "aws_kinesis_streams"
-inputs = ["parse_logs"]
-stream_name = "game-log-stream"
-region = "ap-northeast-1"
-batch.max_events = 1000
-batch.timeout_secs = 1
-```
-
-## 관리 명령어
+## 서비스 관리 명령어
 
 ```bash
 # 서비스 시작
@@ -448,102 +429,48 @@ sudo systemctl stop vector
 # 서비스 재시작
 sudo systemctl restart vector
 
-# 상태 확인
+# 서비스 상태 확인
 sudo systemctl status vector
 
-# 로그 확인
-sudo journalctl -u vector -f
+# 서비스 활성화 (부팅시 자동 시작)
+sudo systemctl enable vector
 
-# 설정 검증
-sudo vector validate /etc/vector/vector.toml
+# 서비스 비활성화
+sudo systemctl disable vector
 
-# 설정 테스트
-sudo vector test /etc/vector/vector.toml
-```
-
-## 고급 기능
-
-### API 엔드포인트 활성화
-
-```toml
-# vector.toml에 추가
-[api]
-enabled = true
-address = "0.0.0.0:8686"
-```
-
-API 사용 예제:
-
-```bash
-# 헬스 체크
-curl http://localhost:8686/health
-
-# 메트릭 확인
-curl http://localhost:8686/metrics
-
-# 설정 정보
-curl http://localhost:8686/config
-```
-
-### 로그 필터링
-
-```toml
-# 에러 로그만 필터링
-[transforms.filter_errors]
-type = "filter"
-inputs = ["parse_logs"]
-condition = '.level == "ERROR" || .level == "WARN"'
-```
-
-### 데이터 샘플링
-
-```toml
-# 10%만 샘플링
-[transforms.sample_logs]
-type = "sample"
-inputs = ["parse_logs"]
-rate = 10
-```
-
-## 모니터링 설정
-
-### CloudWatch 메트릭 전송
-
-```toml
-[sinks.cloudwatch_metrics]
-type = "aws_cloudwatch_metrics"
-inputs = ["parse_logs"]
-namespace = "GameLogs/Vector"
-region = "ap-northeast-1"
-```
-
-### Prometheus 메트릭
-
-```toml
-[sources.internal_metrics]
-type = "internal_metrics"
-
-[sinks.prometheus]
-type = "prometheus_exporter"
-inputs = ["internal_metrics"]
-address = "0.0.0.0:9598"
+# 설정 리로드
+sudo systemctl reload vector
 ```
 
 ## 다음 단계
 
 Vector 설치 및 설정이 완료되면:
 
-1. Amazon Kinesis Data Stream 또는 Data Firehose 생성
-2. EC2 인스턴스에 대한 IAM 권한 설정
-3. 스트림 세부 정보로 Vector 설정 업데이트
-4. AWS 콘솔에서 데이터 흐름 모니터링
-5. 모니터링을 위한 CloudWatch 대시보드 설정
+1. **AWS Kinesis Data Stream 생성**
+   - AWS 콘솔에서 Kinesis Data Stream 생성
+   - 적절한 샤드 수 설정
 
-자세한 정보는 [Vector 공식 문서](https://vector.dev/docs/)를 참조하세요.
+2. **IAM 권한 설정**
+   - EC2 인스턴스에 Kinesis 접근 권한 부여
+   - 필요한 IAM 역할 및 정책 생성
+
+3. **Vector 설정 업데이트**
+   - Kinesis 스트림 정보로 설정 파일 업데이트
+   - 배치 및 재시도 설정 최적화
+
+4. **모니터링 설정**
+   - CloudWatch 대시보드 생성
+   - 알람 및 알림 설정
+
+5. **성능 튜닝**
+   - 로그 볼륨에 따른 배치 크기 조정
+   - 리소스 사용량 모니터링 및 최적화
 
 ## 참고 자료
 
+- [Vector 공식 문서](https://vector.dev/docs/)
 - [Vector GitHub 저장소](https://github.com/vectordotdev/vector)
 - [Vector 설정 예제](https://vector.dev/docs/reference/configuration/)
-- [AWS 통합 가이드](https://vector.dev/docs/reference/configuration/sinks/aws_kinesis_streams/)
-- [성능 튜닝 가이드](https://vector.dev/docs/administration/tuning/)
+- [AWS Kinesis 통합 가이드](https://vector.dev/docs/reference/configuration/sinks/aws_kinesis_streams/)
+- [VRL (Vector Remap Language) 문서](https://vrl.dev/)
+- [Vector 성능 튜닝 가이드](https://vector.dev/docs/administration/tuning/)
