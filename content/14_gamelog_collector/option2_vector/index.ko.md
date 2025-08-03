@@ -115,10 +115,10 @@ encoding.codec = "json"
 EOF
 ```
 
-### JSON 파싱이 포함된 고급 설정
+### JSON 파싱이 포함된 고급 설정 (선택사항)
 
 ```bash
-# JSON 파싱을 포함한 고급 설정 (선택사항)
+# JSON 파싱을 포함한 고급 설정 
 sudo tee /etc/vector/vector-advanced.toml << 'EOF'
 data_dir = "/var/lib/vector"
 
