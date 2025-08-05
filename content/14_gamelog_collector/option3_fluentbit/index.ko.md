@@ -280,42 +280,6 @@ curl http://localhost:2020/api/v1/config
 curl http://localhost:2020/api/v1/health
 ```
 
-## 고급 설정
-
-### AWS Kinesis Streams 연동
-
-```bash
-# Kinesis Streams용 설정 파일 생성
-sudo tee /etc/fluent-bit/kinesis.conf << 'EOF'
-[SERVICE]
-    Flush         1
-    Log_Level     info
-    Daemon        off
-    HTTP_Server   On
-    HTTP_Listen   0.0.0.0
-    HTTP_Port     2020
-
-[INPUT]
-    Name              tail
-    Path              /var/log/game/*.log
-    Tag               game.logs
-    Read_from_Head    true
-
-[FILTER]
-    Name parser
-    Match game.logs
-    Key_Name message
-    Parser json
-
-[OUTPUT]
-    Name kinesis_streams
-    Match *
-    region ap-northeast-2
-    stream game-log-stream
-    partition_key user_id
-EOF
-```
-
 ### CloudWatch Logs 연동
 
 ```bash
@@ -402,41 +366,22 @@ sudo /opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf --dry-run
 pkill -f generate_test_logs.sh
 ```
 
-## 성능 최적화
 
-### 메모리 제한 환경 최적화
-
-```toml
-[SERVICE]
-    storage.backlog.mem_limit 2M
-    
-[INPUT]
-    Mem_Buf_Limit     512k
-    Buffer_Chunk_Size 16k
-    Buffer_Max_Size   128k
-```
-
-### 배치 처리 최적화
-
-```toml
-[OUTPUT]
-    Name kinesis_streams
-    Match *
-    region ap-northeast-2
-    stream game-log-stream
-    batch_size 100
-    batch_timeout 5s
-```
 
 ## 다음 단계
 
-Fluent Bit 설치 및 설정이 완료되면:
+Fluent Bit 설치 및 설정이 완료되면 다음과 같은 작업을 진행합니다.
 
-1. Amazon Kinesis Data Stream 또는 Data Firehose 생성
-2. EC2 인스턴스에 대한 IAM 권한 설정
-3. 스트림 세부 정보로 Fluent Bit 설정 업데이트
-4. AWS 콘솔에서 데이터 흐름 모니터링
-5. CloudWatch 대시보드 설정
+1. **Amazon Data Firehose 생성**
+   - AWS 콘솔에서 Amazon Data Firehose 생성
+
+2. **IAM 권한 설정**
+   - EC2 인스턴스에 Kinesis 접근 권한 부여
+   - 필요한 IAM 역할 및 정책 생성
+
+3. **Fluent Bit 설정 업데이트**
+   - Amazon Data Firehose 정보로 설정 파일 업데이트
+   - 배치 및 재시도 설정 최적화
 
 자세한 정보는 [Fluent Bit 공식 문서](https://docs.fluentbit.io/)를 참조하세요.
 

@@ -404,12 +404,18 @@ CloudWatch 메트릭을 활성화하여 성능을 모니터링할 수 있습니�
 
 ## 다음 단계
 
-Kinesis Agent 설치 및 설정이 완료되면:
+Kinesis Agent 설치 및 설정이 완료되면 다음과 같은 작업을 진행합니다. 
 
-1. Amazon Kinesis Data Stream 또는 Data Firehose 생성
-2. EC2 인스턴스에 대한 IAM 권한 설정
-3. 스트림 세부 정보로 에이전트 설정 업데이트
-4. AWS 콘솔에서 데이터 흐름 모니터링
+1. **Amazon Data Firehose 생성**
+   - AWS 콘솔에서 Amazon Data Firehose 생성
+
+2. **IAM 권한 설정**
+   - EC2 인스턴스에 Kinesis 접근 권한 부여
+   - 필요한 IAM 역할 및 정책 생성
+
+3. **Kinesis Agent 설정 업데이트**
+   - Amazon Data Firehose 정보로 설정 파일 업데이트
+   - 배치 및 재시도 설정 최적화
 
 자세한 정보는 [Amazon Kinesis Agent 공식 문서](https://docs.aws.amazon.com/ko_kr/kinesis/latest/dev/writing-with-agents.html)를 참조하세요.
 

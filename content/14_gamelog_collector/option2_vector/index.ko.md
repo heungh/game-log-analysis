@@ -33,23 +33,26 @@ df -h
 
 ### 바이너리 직접 설치 방법
 
+시스템 패키지 업데이트
 ```bash
-# 시스템 패키지 업데이트
 sudo apt update && sudo apt upgrade -y
+```
+필수 의존성 설치
+```bash
 
-# 필수 의존성 설치
 sudo apt install -y curl wget gnupg2 software-properties-common apt-transport-https ca-certificates
-
-# Vector 바이너리 다운로드
-cd /tmp
+```
+Vector 바이너리 다운로드
+```bash
+#cd /tmp
 wget https://github.com/vectordotdev/vector/releases/download/v0.34.1/vector-0.34.1-x86_64-unknown-linux-musl.tar.gz
+```
 
-# 압축 해제 및 설치
+압축 해제 및 설치 및 Vector 사용자 생성
+```bash
 tar -xzf vector-0.34.1-x86_64-unknown-linux-musl.tar.gz
 sudo cp vector-x86_64-unknown-linux-musl/bin/vector /usr/local/bin/
 sudo chmod +x /usr/local/bin/vector
-
-# Vector 사용자 생성
 sudo useradd --system --shell /bin/false --home-dir /var/lib/vector vector
 ```
 
@@ -252,75 +255,6 @@ sudo tail -f /var/log/vector/processed_logs.log
 sudo journalctl -u vector -n 20
 ```
 
-## AWS Kinesis 연동 설정
-
-### Kinesis Streams 설정
-
-```bash
-# AWS Kinesis Streams용 설정 파일
-sudo tee /etc/vector/vector-kinesis.toml << 'EOF'
-data_dir = "/var/lib/vector"
-
-[sources.game_logs]
-type = "file"
-include = ["/var/log/game/*.log"]
-read_from = "beginning"
-
-[transforms.add_metadata]
-type = "remap"
-inputs = ["game_logs"]
-source = '''
-.timestamp = now()
-.hostname = get_hostname!()
-.source = "vector-agent"
-.original_message = .message
-'''
-
-[sinks.kinesis_stream]
-type = "aws_kinesis_streams"
-inputs = ["add_metadata"]
-stream_name = "game-log-stream"
-region = "ap-northeast-1"
-encoding.codec = "json"
-
-# 배치 설정
-batch.max_events = 100
-batch.timeout_secs = 5
-
-# 재시도 설정
-request.retry_attempts = 3
-request.timeout_secs = 30
-EOF
-```
-
-### Kinesis 설정 적용
-
-```bash
-# Kinesis 설정으로 변경 (필요시)
-sudo cp /etc/vector/vector-kinesis.toml /etc/vector/vector.toml
-
-# 설정 검증
-sudo /usr/local/bin/vector validate /etc/vector/vector.toml
-
-# 서비스 재시작
-sudo systemctl restart vector
-```
-
-## 모니터링 및 문제 해결
-
-### 로그 모니터링
-
-```bash
-# Vector 서비스 로그 확인
-sudo journalctl -u vector -n 50
-
-# 실시간 로그 모니터링
-sudo journalctl -u vector -f
-
-# 처리된 로그 확인
-sudo tail -f /var/log/vector/processed_logs.log
-```
-
 ### 성능 모니터링
 
 ```bash
@@ -444,27 +378,18 @@ sudo systemctl reload vector
 
 ## 다음 단계
 
-Vector 설치 및 설정이 완료되면:
+Vector 설치 및 설정이 완료되면 다음과 같은 작업을 진행합니다. 
 
-1. **AWS Kinesis Data Stream 생성**
-   - AWS 콘솔에서 Kinesis Data Stream 생성
-   - 적절한 샤드 수 설정
+1. **Amazon Data Firehose 생성**
+   - AWS 콘솔에서 Amazon Data Firehose 생성
 
 2. **IAM 권한 설정**
    - EC2 인스턴스에 Kinesis 접근 권한 부여
    - 필요한 IAM 역할 및 정책 생성
 
 3. **Vector 설정 업데이트**
-   - Kinesis 스트림 정보로 설정 파일 업데이트
+   - Amazon Data Firehose 정보로 설정 파일 업데이트
    - 배치 및 재시도 설정 최적화
-
-4. **모니터링 설정**
-   - CloudWatch 대시보드 생성
-   - 알람 및 알림 설정
-
-5. **성능 튜닝**
-   - 로그 볼륨에 따른 배치 크기 조정
-   - 리소스 사용량 모니터링 및 최적화
 
 ## 참고 자료
 
