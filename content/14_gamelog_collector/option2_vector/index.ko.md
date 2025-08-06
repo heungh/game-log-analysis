@@ -12,7 +12,6 @@ Vector는 고성능 관찰 가능성 데이터 파이프라인으로, 로그, �
 - Ubuntu 20.04 LTS EC2 인스턴스
 - 패키지 다운로드를 위한 인터넷 연결
 - AWS 서비스에 대한 적절한 IAM 권한
-- 기본적인 시스템 관리 지식
 
 ## 시스템 정보 확인
 
@@ -298,58 +297,6 @@ du -sh /var/lib/vector /var/log/vector
    # 필요시 권한 수정
    sudo chmod 644 /var/log/game/*.log
    ```
-
-## 연속 테스트 로그 생성
-
-### 자동 로그 생성 스크립트
-
-```bash
-# 연속 테스트 로그 생성 스크립트
-cat > ~/continuous_test_logs.sh << 'EOF'
-#!/bin/bash
-LOG_FILE="/var/log/game/continuous.log"
-counter=1
-
-echo "연속 테스트 로그 생성 시작..."
-
-while true; do
-    # 다양한 형태의 로그 생성
-    case $((counter % 4)) in
-        0)
-            echo "$(date -Iseconds) - User login: user_$((RANDOM%100))" >> $LOG_FILE
-            ;;
-        1)
-            echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_'$((RANDOM%100))'","action":"gameplay","level":'$((RANDOM%50))'}' >> $LOG_FILE
-            ;;
-        2)
-            echo "$(date -Iseconds) - Server event: maintenance_check" >> $LOG_FILE
-            ;;
-        3)
-            echo '{"timestamp":"'$(date -Iseconds)'","event":"purchase","item_id":"item_'$((RANDOM%20))'","price":'$((RANDOM%1000))'}' >> $LOG_FILE
-            ;;
-    esac
-    
-    echo "로그 항목 $counter 생성됨"
-    counter=$((counter + 1))
-    sleep 3
-done
-EOF
-
-chmod +x ~/continuous_test_logs.sh
-```
-
-### 백그라운드 실행
-
-```bash
-# 백그라운드에서 연속 로그 생성
-nohup ~/continuous_test_logs.sh > ~/log_generator.out 2>&1 &
-
-# 프로세스 확인
-ps aux | grep continuous_test_logs
-
-# 로그 생성 중지 (필요시)
-pkill -f continuous_test_logs.sh
-```
 
 ## 서비스 관리 명령어
 

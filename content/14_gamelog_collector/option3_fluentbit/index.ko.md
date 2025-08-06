@@ -12,7 +12,6 @@ Fluent Bit은 경량화된 고성능 로그 프로세서 및 포워더로, 다�
 - Ubuntu 20.04 LTS EC2 인스턴스
 - 패키지 다운로드를 위한 인터넷 연결
 - AWS 서비스에 대한 적절한 IAM 권한
-- 기본적인 시스템 관리 지식
 
 ## 시스템 정보 확인
 
@@ -124,7 +123,7 @@ sudo tee /etc/fluent-bit/fluent-bit.conf << 'EOF'
 [INPUT]
     Name              tail
     Path              /var/log/game/*.log
-    Tag               game.logs
+    Tag               test.logs
     Refresh_Interval  5
     Read_from_Head    true
     Buffer_Chunk_Size 32k
@@ -191,26 +190,13 @@ curl http://localhost:2020/
 curl http://localhost:2020/api/v1/metrics
 ```
 
-## 테스트
-
-### 테스트 로그 생성
-
-```bash
-# 간단한 테스트 로그 생성
-echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_001","action":"login","level":1}' >> /var/log/game/test.log
-echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_002","action":"logout","level":5}' >> /var/log/game/test.log
-
-# 생성된 로그 확인
-cat /var/log/game/test.log
-```
-
-### 연속 테스트 로그 생성
+###  테스트 로그 생성
 
 ```bash
 # 테스트 로그 생성 스크립트 생성
 cat > ~/generate_test_logs.sh << 'EOF'
 #!/bin/bash
-LOG_FILE="/var/log/game/game.log"
+LOG_FILE="/var/log/game/test.log"
 counter=1
 
 echo "Fluent Bit 테스트 로그 생성 시작..."
@@ -242,7 +228,7 @@ nohup ~/generate_test_logs.sh > ~/test_log_generator.out 2>&1 &
 
 ```bash
 # 게임 로그 실시간 모니터링
-tail -f /var/log/game/game.log
+tail -f /var/log/game/test.log
 
 # Fluent Bit 서비스 로그 모니터링
 sudo journalctl -u fluent-bit -f

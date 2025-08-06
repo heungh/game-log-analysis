@@ -11,7 +11,7 @@ Amazon Kinesis Agent는 로그 파일을 모니터링하고 Amazon Kinesis Data 
 
 - Ubuntu 20.04 LTS EC2 인스턴스
 - Java 11 이상 설치
-- Kinesis 서비스에 대한 적절한 IAM 권한
+- AWS 서비스에 대한 적절한 IAM 권한
 - 패키지 다운로드를 위한 인터넷 연결
 - 소스 빌드를 위한 Git 및 Maven
 
@@ -210,7 +210,7 @@ sudo chown ubuntu:ubuntu /var/log/game
 # 테스트 로그 생성 스크립트 생성
 cat > ~/generate_test_logs.sh << 'EOF'
 #!/bin/bash
-LOG_FILE="/var/log/game/game.log"
+LOG_FILE="/var/log/game/test.log"
 while true; do
     echo "{\"timestamp\":\"$(date -Iseconds)\",\"user_id\":\"user_$((RANDOM%1000))\",\"action\":\"login\",\"level\":$((RANDOM%100))}" >> $LOG_FILE
     sleep 1
@@ -223,7 +223,7 @@ chmod +x ~/generate_test_logs.sh
 nohup ~/generate_test_logs.sh &
 
 # 로그 파일 모니터링
-tail -f /var/log/game/game.log
+tail -f /var/log/game/test.log
 ```
 
 ## 설치 확인
