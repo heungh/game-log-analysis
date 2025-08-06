@@ -3,20 +3,19 @@ title: "Option 2: Vector Installation"
 weight: 20
 ---
 
-# Vector Installation Guide for Ubuntu 20.04
+# Vector Installation Guide on Ubuntu 20.04
 
-Vector is a high-performance observability data pipeline that can collect, transform, and route logs, metrics, and traces. It provides efficient data processing with low resource usage.
+Vector is a high-performance observability data pipeline that can collect, transform, and route logs, metrics, and traces. It's a modern tool that provides efficient data processing with low resource usage.
 
 ## Prerequisites
 
 - Ubuntu 20.04 LTS EC2 instance
 - Internet connection for package downloads
 - Appropriate IAM permissions for AWS services
-- Basic system administration knowledge
 
 ## System Information Check
 
-First, verify your system information:
+First, check the system information:
 
 ```bash
 # Check Ubuntu version
@@ -33,23 +32,27 @@ df -h
 
 ### Direct Binary Installation Method
 
+Update system packages:
 ```bash
-# Update system packages
 sudo apt update && sudo apt upgrade -y
+```
 
-# Install essential dependencies
+Install essential dependencies:
+```bash
 sudo apt install -y curl wget gnupg2 software-properties-common apt-transport-https ca-certificates
+```
 
-# Download Vector binary
-cd /tmp
+Download Vector binary:
+```bash
+#cd /tmp
 wget https://github.com/vectordotdev/vector/releases/download/v0.34.1/vector-0.34.1-x86_64-unknown-linux-musl.tar.gz
+```
 
-# Extract and install
+Extract, install, and create Vector user:
+```bash
 tar -xzf vector-0.34.1-x86_64-unknown-linux-musl.tar.gz
 sudo cp vector-x86_64-unknown-linux-musl/bin/vector /usr/local/bin/
 sudo chmod +x /usr/local/bin/vector
-
-# Create Vector user
 sudo useradd --system --shell /bin/false --home-dir /var/lib/vector vector
 ```
 
@@ -76,7 +79,7 @@ sudo chmod 755 /var/log/game
 
 ## Vector Configuration
 
-### Basic Configuration File
+### Create Basic Configuration File
 
 ```bash
 # Create Vector basic configuration file
@@ -115,10 +118,10 @@ encoding.codec = "json"
 EOF
 ```
 
-### Advanced Configuration with JSON Parsing
+### Advanced Configuration with JSON Parsing (Optional)
 
 ```bash
-# Advanced configuration with JSON parsing (optional)
+# Advanced configuration with JSON parsing
 sudo tee /etc/vector/vector-advanced.toml << 'EOF'
 data_dir = "/var/lib/vector"
 
@@ -165,7 +168,7 @@ encoding.codec = "json"
 EOF
 ```
 
-## systemd Service Setup
+## systemd Service Configuration
 
 ### Create Service File
 
@@ -235,14 +238,14 @@ echo "Test message from game" | sudo tee /var/log/game/test.log
 # Generate JSON format test log
 echo '{"user_id": "user123", "action": "login", "level": 25}' | sudo tee -a /var/log/game/test.log
 
-# Generate additional test logs
+# Additional test log
 echo "$(date -Iseconds) - Game server started" | sudo tee -a /var/log/game/test.log
 ```
 
 ### Check Vector Output
 
 ```bash
-# Monitor Vector service logs in real-time
+# Check Vector service logs in real-time
 sudo journalctl -u vector -f
 
 # Check processed log file
@@ -250,75 +253,6 @@ sudo tail -f /var/log/vector/processed_logs.log
 
 # Check console output (in separate terminal)
 sudo journalctl -u vector -n 20
-```
-
-## AWS Kinesis Integration Setup
-
-### Kinesis Streams Configuration
-
-```bash
-# Configuration file for AWS Kinesis Streams
-sudo tee /etc/vector/vector-kinesis.toml << 'EOF'
-data_dir = "/var/lib/vector"
-
-[sources.game_logs]
-type = "file"
-include = ["/var/log/game/*.log"]
-read_from = "beginning"
-
-[transforms.add_metadata]
-type = "remap"
-inputs = ["game_logs"]
-source = '''
-.timestamp = now()
-.hostname = get_hostname!()
-.source = "vector-agent"
-.original_message = .message
-'''
-
-[sinks.kinesis_stream]
-type = "aws_kinesis_streams"
-inputs = ["add_metadata"]
-stream_name = "game-log-stream"
-region = "ap-northeast-1"
-encoding.codec = "json"
-
-# Batch settings
-batch.max_events = 100
-batch.timeout_secs = 5
-
-# Retry settings
-request.retry_attempts = 3
-request.timeout_secs = 30
-EOF
-```
-
-### Apply Kinesis Configuration
-
-```bash
-# Switch to Kinesis configuration (when needed)
-sudo cp /etc/vector/vector-kinesis.toml /etc/vector/vector.toml
-
-# Validate configuration
-sudo /usr/local/bin/vector validate /etc/vector/vector.toml
-
-# Restart service
-sudo systemctl restart vector
-```
-
-## Monitoring and Troubleshooting
-
-### Log Monitoring
-
-```bash
-# Check Vector service logs
-sudo journalctl -u vector -n 50
-
-# Real-time log monitoring
-sudo journalctl -u vector -f
-
-# Check processed logs
-sudo tail -f /var/log/vector/processed_logs.log
 ```
 
 ### Performance Monitoring
@@ -344,7 +278,7 @@ du -sh /var/lib/vector /var/log/vector
    # Validate configuration
    sudo /usr/local/bin/vector validate /etc/vector/vector.toml
    
-   # Run directly to identify issues
+   # Direct execution to identify issues
    sudo /usr/local/bin/vector --config /etc/vector/vector.toml
    ```
 
@@ -361,61 +295,9 @@ du -sh /var/lib/vector /var/log/vector
    # Check log file permissions
    ls -la /var/log/game/
    
-   # Fix permissions if needed
+   # Modify permissions if needed
    sudo chmod 644 /var/log/game/*.log
    ```
-
-## Continuous Test Log Generation
-
-### Automated Log Generation Script
-
-```bash
-# Create continuous test log generation script
-cat > ~/continuous_test_logs.sh << 'EOF'
-#!/bin/bash
-LOG_FILE="/var/log/game/continuous.log"
-counter=1
-
-echo "Starting continuous test log generation..."
-
-while true; do
-    # Generate various types of logs
-    case $((counter % 4)) in
-        0)
-            echo "$(date -Iseconds) - User login: user_$((RANDOM%100))" >> $LOG_FILE
-            ;;
-        1)
-            echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_'$((RANDOM%100))'","action":"gameplay","level":'$((RANDOM%50))'}' >> $LOG_FILE
-            ;;
-        2)
-            echo "$(date -Iseconds) - Server event: maintenance_check" >> $LOG_FILE
-            ;;
-        3)
-            echo '{"timestamp":"'$(date -Iseconds)'","event":"purchase","item_id":"item_'$((RANDOM%20))'","price":'$((RANDOM%1000))'}' >> $LOG_FILE
-            ;;
-    esac
-    
-    echo "Log entry $counter generated"
-    counter=$((counter + 1))
-    sleep 3
-done
-EOF
-
-chmod +x ~/continuous_test_logs.sh
-```
-
-### Background Execution
-
-```bash
-# Run continuous log generation in background
-nohup ~/continuous_test_logs.sh > ~/log_generator.out 2>&1 &
-
-# Check process
-ps aux | grep continuous_test_logs
-
-# Stop log generation (when needed)
-pkill -f continuous_test_logs.sh
-```
 
 ## Service Management Commands
 
@@ -444,29 +326,20 @@ sudo systemctl reload vector
 
 ## Next Steps
 
-After Vector installation and configuration is complete:
+Once Vector installation and configuration is complete, proceed with the following tasks:
 
-1. **Create AWS Kinesis Data Stream**
-   - Create Kinesis Data Stream in AWS Console
-   - Configure appropriate shard count
+1. **Create Amazon Data Firehose**
+   - Create Amazon Data Firehose in AWS Console
 
-2. **Setup IAM Permissions**
+2. **Configure IAM Permissions**
    - Grant Kinesis access permissions to EC2 instance
    - Create necessary IAM roles and policies
 
 3. **Update Vector Configuration**
-   - Update configuration file with Kinesis stream details
+   - Update configuration file with Amazon Data Firehose information
    - Optimize batch and retry settings
 
-4. **Setup Monitoring**
-   - Create CloudWatch dashboards
-   - Configure alarms and notifications
-
-5. **Performance Tuning**
-   - Adjust batch sizes based on log volume
-   - Monitor and optimize resource usage
-
-## Reference Materials
+## References
 
 - [Vector Official Documentation](https://vector.dev/docs/)
 - [Vector GitHub Repository](https://github.com/vectordotdev/vector)

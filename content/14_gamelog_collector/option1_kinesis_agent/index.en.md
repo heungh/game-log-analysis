@@ -11,13 +11,13 @@ Amazon Kinesis Agent is a standalone Java application that monitors log files an
 
 - Ubuntu 20.04 LTS EC2 instance
 - Java 11 or higher installed
-- Appropriate IAM permissions for Kinesis services
+- Appropriate IAM permissions for AWS services
 - Internet connection for package downloads
 - Git and Maven for source build
 
 ## System Information Check
 
-First, check your system information:
+First, check the system information:
 
 ```bash
 # Check Ubuntu version
@@ -32,10 +32,10 @@ df -h
 
 ## Installation Method: Build from GitHub Source
 
-Since Kinesis Agent doesn't currently provide binary files, you can build and use the latest version from the GitHub source.
+Since Kinesis Agent currently doesn't provide binary files, you can build and use the latest version from the GitHub source.
 
 ```bash
-# Install required tools (Java, Maven installation)
+# Install necessary tools (Java, Maven installation)
 sudo apt update
 sudo apt install -y git maven openjdk-11-jdk
 
@@ -44,7 +44,7 @@ java -version
 mvn -version
 ```
 
-After confirming that Java and Maven are properly installed by checking their versions, build the Kinesis Agent as follows:
+If Java and Maven versions are confirmed to be installed properly, build the Kinesis Agent as follows:
 
 ```bash
 # Create necessary directories
@@ -56,7 +56,7 @@ sudo mkdir -p /var/log/aws-kinesis-agent
 git clone https://github.com/awslabs/amazon-kinesis-agent.git
 cd amazon-kinesis-agent
 
-# Check latest tags (optional)
+# Check latest tag (optional)
 git tag --sort=-version:refname | head -5
 
 # Build (skip tests for faster build)
@@ -66,7 +66,7 @@ mvn clean package -DskipTests
 ls -la target/
 ```
 
-After building the Kinesis Agent, proceed with environment configuration tasks such as moving the created JAR file:
+Build the Kinesis Agent and proceed with environment configuration tasks such as moving the created JAR file:
 
 ```bash
 # Copy dependencies to lib directory
@@ -91,12 +91,12 @@ sudo tee /etc/aws-kinesis/agent.json << 'EOF'
 EOF
 ```
 
-The Kinesis Agent configuration file section is left blank as shown above, and we'll configure it again in the following exercises.
-Next, we'll create execution scripts based on the configured environment and start the service:
+The Kinesis Agent configuration file section is left blank as above and will be configured again in the following exercises.
+Next is the task of creating execution scripts and running services based on the configured environment.
 
 ```bash
 # Create execution script with exact JAR filename (replace 2.0.13 with actual version)
-# First, check the exact version number
+# First check exact version number
 VERSION=$(ls /usr/share/aws-kinesis-agent/amazon-kinesis-agent-*.jar | sed 's/.*amazon-kinesis-agent-\(.*\)\.jar/\1/')
 echo "Detected version: $VERSION"
 
@@ -211,7 +211,7 @@ sudo chown ubuntu:ubuntu /var/log/game
 # Create test log generation script
 cat > ~/generate_test_logs.sh << 'EOF'
 #!/bin/bash
-LOG_FILE="/var/log/game/game.log"
+LOG_FILE="/var/log/game/test.log"
 while true; do
     echo "{\"timestamp\":\"$(date -Iseconds)\",\"user_id\":\"user_$((RANDOM%1000))\",\"action\":\"login\",\"level\":$((RANDOM%100))}" >> $LOG_FILE
     sleep 1
@@ -224,7 +224,7 @@ chmod +x ~/generate_test_logs.sh
 nohup ~/generate_test_logs.sh &
 
 # Monitor log file
-tail -f /var/log/game/game.log
+tail -f /var/log/game/test.log
 ```
 
 ## Installation Verification
@@ -405,14 +405,20 @@ You can enable CloudWatch metrics to monitor performance:
 
 ## Next Steps
 
-Once Kinesis Agent installation and configuration is complete:
+Once Kinesis Agent installation and configuration is complete, proceed with the following tasks:
 
-1. Create Amazon Kinesis Data Stream or Data Firehose
-2. Configure IAM permissions for EC2 instance
-3. Update agent configuration with stream details
-4. Monitor data flow in AWS console
+1. **Create Amazon Data Firehose**
+   - Create Amazon Data Firehose in AWS Console
 
-For more information, refer to the [Amazon Kinesis Agent official documentation](https://docs.aws.amazon.com/kinesis/latest/dev/writing-with-agents.html).
+2. **Configure IAM Permissions**
+   - Grant Kinesis access permissions to EC2 instance
+   - Create necessary IAM roles and policies
+
+3. **Update Kinesis Agent Configuration**
+   - Update configuration file with Amazon Data Firehose information
+   - Optimize batch and retry settings
+
+For detailed information, refer to the [Amazon Kinesis Agent Official Documentation](https://docs.aws.amazon.com/kinesis/latest/dev/writing-with-agents.html).
 
 ## References
 

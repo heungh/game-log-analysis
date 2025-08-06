@@ -3,20 +3,19 @@ title: "Option 3: Fluent Bit Installation"
 weight: 30
 ---
 
-# Fluent Bit Installation Guide for Ubuntu 20.04
+# Fluent Bit Installation Guide on Ubuntu 20.04
 
-Fluent Bit is a lightweight, high-performance log processor and forwarder that is part of the CNCF project. It can collect data from various sources and send it to multiple destinations with low memory usage and high throughput.
+Fluent Bit is a lightweight, high-performance log processor and forwarder that can collect data from various sources and send it to multiple destinations. It's a CNCF project that provides low memory usage and high throughput.
 
 ## Prerequisites
 
 - Ubuntu 20.04 LTS EC2 instance
 - Internet connection for package downloads
 - Appropriate IAM permissions for AWS services
-- Basic system administration knowledge
 
 ## System Information Check
 
-First, verify your system information:
+First, check the system information:
 
 ```bash
 # Check Ubuntu version
@@ -70,10 +69,10 @@ ls -la /opt/fluent-bit/bin/fluent-bit
 /opt/fluent-bit/bin/fluent-bit --version
 ```
 
-### Step 4: Setup Execution Path
+### Step 4: Set Execution Path
 
 ```bash
-# Create symbolic link for convenience
+# Create symbolic link (for convenience)
 sudo ln -sf /opt/fluent-bit/bin/fluent-bit /usr/local/bin/fluent-bit
 
 # Refresh PATH
@@ -92,7 +91,7 @@ sudo chown ubuntu:ubuntu /var/log/game
 sudo chmod 755 /var/log/game
 sudo chmod 755 /var/log/fluent-bit
 
-# Verify directories
+# Check directories
 ls -la /var/log/ | grep -E "(game|fluent)"
 ```
 
@@ -124,7 +123,7 @@ sudo tee /etc/fluent-bit/fluent-bit.conf << 'EOF'
 [INPUT]
     Name              tail
     Path              /var/log/game/*.log
-    Tag               game.logs
+    Tag               test.logs
     Refresh_Interval  5
     Read_from_Head    true
     Buffer_Chunk_Size 32k
@@ -178,7 +177,7 @@ sudo systemctl enable fluent-bit
 ### Installation Verification
 
 ```bash
-# Check if service is active
+# Check service active status
 sudo systemctl is-active fluent-bit
 
 # Check process
@@ -191,26 +190,13 @@ curl http://localhost:2020/
 curl http://localhost:2020/api/v1/metrics
 ```
 
-## Testing
-
 ### Generate Test Logs
-
-```bash
-# Generate simple test logs
-echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_001","action":"login","level":1}' >> /var/log/game/test.log
-echo '{"timestamp":"'$(date -Iseconds)'","user_id":"user_002","action":"logout","level":5}' >> /var/log/game/test.log
-
-# Check generated logs
-cat /var/log/game/test.log
-```
-
-### Continuous Test Log Generation
 
 ```bash
 # Create test log generation script
 cat > ~/generate_test_logs.sh << 'EOF'
 #!/bin/bash
-LOG_FILE="/var/log/game/game.log"
+LOG_FILE="/var/log/game/test.log"
 counter=1
 
 echo "Starting Fluent Bit test log generation..."
@@ -242,7 +228,7 @@ nohup ~/generate_test_logs.sh > ~/test_log_generator.out 2>&1 &
 
 ```bash
 # Monitor game logs in real-time
-tail -f /var/log/game/game.log
+tail -f /var/log/game/test.log
 
 # Monitor Fluent Bit service logs
 sudo journalctl -u fluent-bit -f
@@ -264,7 +250,7 @@ ps aux | grep fluent-bit | grep -v grep
 sudo ss -tulpn | grep 2020
 ```
 
-### HTTP API Monitoring
+### Monitoring via HTTP API
 
 ```bash
 # Check basic information
@@ -273,47 +259,11 @@ curl http://localhost:2020/
 # Check metrics
 curl http://localhost:2020/api/v1/metrics
 
-# Check configuration
+# Check configuration information
 curl http://localhost:2020/api/v1/config
 
 # Health check
 curl http://localhost:2020/api/v1/health
-```
-
-## Advanced Configuration
-
-### AWS Kinesis Streams Integration
-
-```bash
-# Create configuration file for Kinesis Streams
-sudo tee /etc/fluent-bit/kinesis.conf << 'EOF'
-[SERVICE]
-    Flush         1
-    Log_Level     info
-    Daemon        off
-    HTTP_Server   On
-    HTTP_Listen   0.0.0.0
-    HTTP_Port     2020
-
-[INPUT]
-    Name              tail
-    Path              /var/log/game/*.log
-    Tag               game.logs
-    Read_from_Head    true
-
-[FILTER]
-    Name parser
-    Match game.logs
-    Key_Name message
-    Parser json
-
-[OUTPUT]
-    Name kinesis_streams
-    Match *
-    region ap-northeast-2
-    stream game-log-stream
-    partition_key user_id
-EOF
 ```
 
 ### CloudWatch Logs Integration
@@ -352,7 +302,7 @@ EOF
    sudo systemctl restart fluent-bit
    ```
 
-2. **Configuration File Error**
+2. **Configuration File Errors**
    ```bash
    sudo /opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf --dry-run
    ```
@@ -392,7 +342,7 @@ sudo systemctl restart fluent-bit
 # Check status
 sudo systemctl status fluent-bit
 
-# View logs
+# Check logs
 sudo journalctl -u fluent-bit -f
 
 # Validate configuration
@@ -402,47 +352,26 @@ sudo /opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf --dry-run
 pkill -f generate_test_logs.sh
 ```
 
-## Performance Optimization
-
-### Memory-Limited Environment Optimization
-
-```toml
-[SERVICE]
-    storage.backlog.mem_limit 2M
-    
-[INPUT]
-    Mem_Buf_Limit     512k
-    Buffer_Chunk_Size 16k
-    Buffer_Max_Size   128k
-```
-
-### Batch Processing Optimization
-
-```toml
-[OUTPUT]
-    Name kinesis_streams
-    Match *
-    region ap-northeast-2
-    stream game-log-stream
-    batch_size 100
-    batch_timeout 5s
-```
-
 ## Next Steps
 
-After completing Fluent Bit installation and configuration:
+Once Fluent Bit installation and configuration is complete, proceed with the following tasks:
 
-1. Create Amazon Kinesis Data Stream or Data Firehose
-2. Set up IAM permissions for EC2 instance
-3. Update Fluent Bit configuration with stream details
-4. Monitor data flow in AWS Console
-5. Set up CloudWatch dashboards
+1. **Create Amazon Data Firehose**
+   - Create Amazon Data Firehose in AWS Console
 
-For more information, refer to the [Fluent Bit official documentation](https://docs.fluentbit.io/).
+2. **Configure IAM Permissions**
+   - Grant Kinesis access permissions to EC2 instance
+   - Create necessary IAM roles and policies
+
+3. **Update Fluent Bit Configuration**
+   - Update configuration file with Amazon Data Firehose information
+   - Optimize batch and retry settings
+
+For detailed information, refer to the [Fluent Bit Official Documentation](https://docs.fluentbit.io/).
 
 ## References
 
 - [Fluent Bit GitHub Repository](https://github.com/fluent/fluent-bit)
 - [Fluent Bit Configuration Guide](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit)
-- [AWS Output Plugins](https://docs.fluentbit.io/manual/pipeline/outputs/kinesis)
+- [AWS Output Plugin](https://docs.fluentbit.io/manual/pipeline/outputs/kinesis)
 - [Performance Tuning Guide](https://docs.fluentbit.io/manual/administration/memory-management)
