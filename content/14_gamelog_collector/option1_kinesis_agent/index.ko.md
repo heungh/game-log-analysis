@@ -167,6 +167,7 @@ sudo vi /etc/aws-kinesis/agent.json
 설정 예제:
 
 ```json
+sudo tee /etc/aws-kinesis/agent.json > /dev/null <<EOF
 {
   "cloudwatch.emitMetrics": true,
   "kinesis.endpoint": "",
@@ -175,10 +176,13 @@ sudo vi /etc/aws-kinesis/agent.json
     {
       "filePattern": "/var/log/game/*.log",
       "kinesisStream": "game-log-stream",
+      "deliveryStream": "game-log-df",
       "partitionKeyOption": "RANDOM"
     }
   ]
 }
+EOF
+
 ```
 
 ### 설정 옵션

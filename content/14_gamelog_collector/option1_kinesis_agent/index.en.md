@@ -168,6 +168,7 @@ sudo vi /etc/aws-kinesis/agent.json
 Configuration example:
 
 ```json
+sudo tee /etc/aws-kinesis/agent.json > /dev/null <<EOF
 {
   "cloudwatch.emitMetrics": true,
   "kinesis.endpoint": "",
@@ -176,10 +177,13 @@ Configuration example:
     {
       "filePattern": "/var/log/game/*.log",
       "kinesisStream": "game-log-stream",
+      "deliveryStream": "game-log-df",
       "partitionKeyOption": "RANDOM"
     }
   ]
 }
+EOF
+
 ```
 
 ### Configuration Options
