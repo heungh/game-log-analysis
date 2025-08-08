@@ -47,6 +47,7 @@ awsAccountConfig:
 
     managedPolicies: 
       - "arn:aws:iam::aws:policy/PowerUserAccess"
+      - "arn:aws:iam::aws:policy/IAMFullAccess"
     
     trustedPrincipals:
       service: 

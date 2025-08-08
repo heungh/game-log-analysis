@@ -160,12 +160,6 @@ sudo journalctl -u aws-kinesis-agent -f
 
 설정 파일을 편집합니다:
 
-```bash
-sudo vi /etc/aws-kinesis/agent.json
-```
-
-설정 예제:
-
 ```json
 sudo tee /etc/aws-kinesis/agent.json > /dev/null <<EOF
 {
@@ -229,10 +223,12 @@ nohup ~/generate_test_logs.sh &
 # 로그 파일 모니터링
 tail -f /var/log/game/test.log
 ```
+여기까지 정상적으로 로그가 나왔다면 정상적으로 설치가 되었고 키네시스 에이전트가 로그를 정상적으로 스트리밍하고 있는것입니다. 
 
-## 설치 확인
+## 키네시스 에이저느 운영에 대한 유용한 명령문들 
+키네시스 에이전트의 서비스가 정상적으로 실행되는지 또는 서버에 부하를 주는 정도의 모니터링이 필요할 경우 아래 명령문들을 참조하세요.  
 
-### 설치 상태 확인
+### 서비스 상태 확인
 
 ```bash
 # 서비스가 실행 중인지 확인
@@ -244,21 +240,20 @@ ps aux | grep kinesis
 # 최근 로그 확인
 sudo journalctl -u aws-kinesis-agent --no-pager -n 20
 
-# 도움말 명령 테스트
-aws-kinesis-agent --help
 ```
 
 ### 성능 모니터링
 
 ```bash
 # 리소스 사용량 확인
-top -p $(pgrep -f kinesis)
+top -p $(pgrep -f kinesis | tr '\n' ',' | sed 's/,$//')
 
 # 네트워크 연결 확인
 sudo ss -tulpn | grep java
 ```
 
 ## 문제 해결
+키네시스 에이전트가 정상적으로 작동하지 않는 경우에 문제해결을 위한 팁입니다. 
 
 ### 일반적인 문제
 
@@ -388,7 +383,7 @@ java -Xmx512m -Xms256m -cp "$CLASSPATH" \
      com.amazon.kinesis.streaming.agent.Agent "$@"
 ```
 
-### 모니터링 설정
+### 클라우드 워치 메트릭 모니터링 설정
 
 CloudWatch 메트릭을 활성화하여 성능을 모니터링할 수 있습니다:
 
